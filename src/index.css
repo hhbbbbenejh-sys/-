@@ -1,0 +1,58 @@
+@import url('https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;500;600;700;800&family=Tajawal:wght@400;500;700;800&family=Alexandria:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Cairo", "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+/* Custom scrollbar styling to fit the elegant ERP design */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* Classic MDI selection/active styles */
+.mdi-active-window {
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.15), 0 8px 10px -6px rgba(0, 0, 0, 0.15);
+  border-color: #3b82f6 !important;
+}
+
+/* Grid and typography utilities */
+html, body, #root {
+  direction: rtl;
+  font-family: "Cairo", sans-serif;
+  height: 100%;
+  overflow: hidden;
+  background-color: #f1f5f9;
+}
+
+/* Custom animations for windows entry */
+@keyframes windowOpen {
+  from {
+    transform: scale(0.95);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.animate-window-open {
+  animation: windowOpen 0.15s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}

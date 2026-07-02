@@ -1,0 +1,6 @@
+{
+  "name": "أحمد سامي سيستم - Ahmed Samy System",
+  "description": "نظام تخطيط موارد المؤسسات المتكامل (أحمد سامي سيستم) لإدارة الحسابات، المستودعات، المشتريات والمبيعات مع إدارة متقدمة للصلاحيات، النسخ الاحتياطي واللغات المتعددة.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
