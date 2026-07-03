@@ -3,7 +3,7 @@ import { useErp } from '../context/ErpContext';
 import { Database, User, MapPin, Warehouse, RefreshCw, Calendar, Clock } from 'lucide-react';
 
 export const StatusBar: React.FC = () => {
-  const { connectedDbId, databases, currentUser } = useErp();
+  const { connectedDbId, databases, currentUser, currentVersion } = useErp();
   const [time, setTime] = useState<string>('');
 
   useEffect(() => {
@@ -74,7 +74,7 @@ export const StatusBar: React.FC = () => {
         <div className="flex items-center gap-1.5 text-blue-400">
           <Database className="w-3.5 h-3.5" />
           <span>الإصدار:</span>
-          <span className="font-mono font-bold text-slate-100 bg-slate-700/50 px-2 py-0.5 rounded border border-slate-600">v12.0.1_Enterprise</span>
+          <span className="font-mono font-bold text-slate-100 bg-slate-700/50 px-2 py-0.5 rounded border border-slate-600">v{currentVersion}_Enterprise</span>
         </div>
 
         <div className="h-4 w-[1px] bg-slate-700" />

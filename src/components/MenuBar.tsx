@@ -167,6 +167,7 @@ export const MenuBar: React.FC = () => {
         { label: 'إدارة وتخصيص تصميم الشاشات', permissionKey: 'settings', action: () => openWindow('tools_manager', 'إدارة وتخصيص الشاشات والواجهات', { initialTab: 'layout' }) },
         { label: 'فحص وإصلاح قاعدة البيانات', permissionKey: 'settings', action: () => openWindow('tools_manager', 'فحص وإصلاح قاعدة البيانات', { initialTab: 'maintenance' }) },
         { label: 'تدوير الحسابات إلى سنة جديدة', permissionKey: 'settings', action: () => openWindow('tools_manager', 'تدوير الدفاتر والحسابات المالية', { initialTab: 'closing' }) },
+        { label: 'مدير التحديثات التلقائية للنظام (Admin)', permissionKey: 'settings', action: () => openWindow('admin_updates', 'مدير التحديثات التلقائية المطور') },
         { divider: true },
         { label: 'إعدادات وخيارات النظام العامة', permissionKey: 'settings', action: () => openWindow('tools_manager', 'إعدادات وخيارات النظام العامة', { initialTab: 'settings' }) }
       ]

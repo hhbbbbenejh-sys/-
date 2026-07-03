@@ -140,6 +140,9 @@ export interface Invoice {
   taxPercent: number; // e.g., 15 for 15%
   expenses: number;
   netAmount: number;
+  attachments?: { name: string; url: string }[];
+  stickyNotes?: string;
+  auditLogs?: string[];
 }
 
 export interface MdiWindow {
@@ -204,6 +207,7 @@ export interface ErpUser {
   phone?: string;
   isActive: boolean;
   permissions: ErpPermissions;
+  role?: string;
 }
 
 export interface LoginLog {
@@ -215,4 +219,50 @@ export interface LoginLog {
   device: string;
   lastActivity: string;
 }
+
+export interface ManufacturingMaterial {
+  itemId: string;
+  quantityRequired: number;
+  quantityConsumed: number;
+  unitPrice: number;
+}
+
+export interface ManufacturingOrder {
+  id: string;
+  orderNo: string;
+  date: string;
+  status: 'pending' | 'in_progress' | 'completed' | 'cancelled';
+  productItemId: string;
+  quantity: number;
+  warehouseId: string;
+  notes: string;
+  materials: ManufacturingMaterial[];
+}
+
+export interface PrintElement {
+  id: string;
+  type: 'text' | 'image' | 'barcode' | 'qrcode' | 'table' | 'totals' | 'logo' | 'signature' | 'stamp' | 'header' | 'footer' | 'watermark';
+  x: number; // grid position x (e.g. 0 to 100)
+  y: number; // grid position y (e.g. 0 to 1000)
+  w: number; // width (e.g. 1 to 100)
+  h: number; // height (pixels)
+  value: string; // custom text, header text, logo path, or key (e.g., "{invoiceNo}", "{customerName}")
+  fontSize?: number;
+  align?: 'right' | 'left' | 'center';
+  bold?: boolean;
+  color?: string;
+}
+
+export interface PrintTemplate {
+  id: string;
+  name: string;
+  type: string; // 'sale' | 'purchase' | 'sale_return' | 'purchase_return' | 'quotation' | 'delivery' | 'transfer' | 'receipt' | 'payment' | 'journal'
+  paperSize: string; // 'A4' | 'A5' | 'receipt_80' | 'receipt_58' | 'letter' | 'legal'
+  isPortrait: boolean;
+  margins: { top: number; bottom: number; left: number; right: number };
+  showFrame: boolean;
+  isDefault: boolean;
+  elements: PrintElement[];
+}
+
 

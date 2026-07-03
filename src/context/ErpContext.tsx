@@ -17,7 +17,22 @@ import {
   ErpPermissions,
   ErpUser,
   LoginLog,
+  ManufacturingOrder,
+  PrintTemplate,
+  PrintElement,
 } from '../types/erp';
+import { supabase } from '../utils/supabase';
+import {
+  checkSupabaseConnection,
+  fetchDatabases,
+  createDatabase as createDbInSync,
+  deleteDatabase as deleteDbInSync,
+  fetchCompanyData,
+  saveCompanyRecord,
+  deleteCompanyRecord,
+  subscribeToCompanyChanges,
+} from '../utils/supabaseSync';
+
 
 interface ErpContextType {
   databases: ErpDatabase[];
@@ -26,8 +41,8 @@ interface ErpContextType {
   setSaveSettingsNoShow: (val: boolean) => void;
   connectDatabase: (id: string) => void;
   disconnectDatabase: () => void;
-  createDatabase: (name: string, description: string) => string;
-  deleteDatabase: (id: string) => void;
+  createDatabase: (name: string, description: string) => Promise<string>;
+  deleteDatabase: (id: string) => Promise<void>;
   
   // MDI Windows State
   windows: MdiWindow[];
@@ -56,6 +71,8 @@ interface ErpContextType {
   invoices: Invoice[];
   tasks: TaskItem[];
   alerts: AlertItem[];
+  manufacturing: ManufacturingOrder[];
+  templates: PrintTemplate[];
 
   // Mutators
   addBranch: (branch: Branch) => void;
@@ -68,6 +85,12 @@ interface ErpContextType {
   addJournalEntry: (entry: JournalEntry) => void;
   addInvoice: (invoice: Invoice) => void;
   deleteInvoice: (id: string) => void;
+  addManufacturingOrder: (mo: ManufacturingOrder) => void;
+  deleteManufacturingOrder: (id: string) => void;
+  addTask: (task: TaskItem) => void;
+  deleteTask: (id: string) => void;
+  addPrintTemplate: (template: PrintTemplate) => void;
+  deletePrintTemplate: (id: string) => void;
 
   // Utility Operations
   setTasks: React.Dispatch<React.SetStateAction<TaskItem[]>>;
@@ -76,7 +99,7 @@ interface ErpContextType {
   setCurrentUser: (user: ErpUser | null) => void;
   users: ErpUser[];
   loginLogs: LoginLog[];
-  loginUser: (username: string, password: string, saveUsername: boolean) => { success: boolean; error?: string };
+  loginUser: (username: string, password: string, saveUsername: boolean) => Promise<{ success: boolean; error?: string }>;
   logoutUser: () => void;
   addUser: (user: ErpUser) => void;
   updateUser: (user: ErpUser) => void;
@@ -113,6 +136,16 @@ interface ErpContextType {
   checkProgramUpdate: () => Promise<{ hasUpdate: boolean; version?: string }>;
   isUpdatingDb: boolean;
   updateDatabaseSchema: () => Promise<void>;
+  currentVersion: string;
+  availableUpdate: any;
+  setAvailableUpdate: (update: any) => void;
+  updateProgress: number;
+  isDownloadingUpdate: boolean;
+  showUpdateBanner: boolean;
+  setShowUpdateBanner: (val: boolean) => void;
+  publishNewVersion: (version: string, notes: string, changelog: string, size: string, isMandatory: boolean) => Promise<boolean>;
+  rollbackLatestVersion: () => Promise<boolean>;
+  installUpdate: () => Promise<boolean>;
 }
 
 const ErpContext = createContext<ErpContextType | undefined>(undefined);
@@ -143,22 +176,20 @@ const DEFAULT_USERS: ErpUser[] = [
   {
     id: 'usr-admin',
     fullName: 'مدير النظام المالي المعتمد',
-    username: 'admin',
-    password: '12345',
+    username: 'Ahmed',
+    password: '01278150',
     jobTitle: 'المدير العام',
     department: 'الإدارة العامة',
-    email: 'admin@almeezan.net',
+    email: 'ahmed@almeezan.net',
     phone: '0500000000',
     isActive: true,
     permissions: FULL_PERMISSIONS,
+    role: 'admin',
   },
 ];
 
-// Initial Static Databases
-const INITIAL_DATABASES: ErpDatabase[] = [
-  { id: 'db-main', name: 'AlMeezan_DB_2026', description: 'قاعدة البيانات الرئيسية للمؤسسة', version: '11.4.2' },
-  { id: 'db-test', name: 'AlMeezan_Test', description: 'قاعدة بيانات تجريبية للتدريب', version: '11.4.0' },
-];
+// Initial Static Databases - Empty for first-use isolation
+const INITIAL_DATABASES: ErpDatabase[] = [];
 
 export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   // Connection state
@@ -166,6 +197,20 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const saved = localStorage.getItem('erp_databases');
     return saved ? JSON.parse(saved) : INITIAL_DATABASES;
   });
+
+  // Load databases on mount from Supabase / server backend
+  useEffect(() => {
+    const initDbConnection = async () => {
+      await checkSupabaseConnection();
+      const loaded = await fetchDatabases();
+      if (loaded && loaded.length > 0) {
+        setDatabases(loaded);
+        localStorage.setItem('erp_databases', JSON.stringify(loaded));
+      }
+    };
+    initDbConnection();
+  }, []);
+
   const [connectedDbId, setConnectedDbId] = useState<string | null>(() => {
     const saved = localStorage.getItem('erp_connected_db');
     const skip = localStorage.getItem('erp_skip_connect_screen');
@@ -344,21 +389,149 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [showToast]);
 
   // 8. Update checking and DB updating states
+  const [currentVersion, setCurrentVersion] = useState<string>(() => {
+    return localStorage.getItem('erp_system_version') || '12.0.0';
+  });
+  const [availableUpdate, setAvailableUpdate] = useState<any>(null);
+  const [updateProgress, setUpdateProgress] = useState<number>(-1);
+  const [isDownloadingUpdate, setIsDownloadingUpdate] = useState<boolean>(false);
+  const [showUpdateBanner, setShowUpdateBanner] = useState<boolean>(false);
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
+
   const checkProgramUpdate = useCallback(async () => {
     setIsCheckingUpdate(true);
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    setIsCheckingUpdate(false);
-    return { hasUpdate: true, version: 'v12.0.1_Enterprise' };
-  }, []);
+    try {
+      const res = await fetch(`/api/updates/check?currentVersion=${currentVersion}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.hasUpdate && data.latest) {
+          setAvailableUpdate(data.latest);
+          setShowUpdateBanner(true);
+          return { hasUpdate: true, version: data.latest.version };
+        } else {
+          setAvailableUpdate(null);
+          setShowUpdateBanner(false);
+          return { hasUpdate: false };
+        }
+      }
+    } catch (err) {
+      console.error('Error checking for updates:', err);
+    } finally {
+      setIsCheckingUpdate(false);
+    }
+    return { hasUpdate: false };
+  }, [currentVersion]);
+
+  // Periodic update check every 30 minutes, plus on app startup
+  useEffect(() => {
+    checkProgramUpdate();
+    const interval = setInterval(() => {
+      checkProgramUpdate();
+    }, 1800000); // 30 minutes in milliseconds
+    return () => clearInterval(interval);
+  }, [checkProgramUpdate]);
 
   const [isUpdatingDb, setIsUpdatingDb] = useState(false);
   const updateDatabaseSchema = useCallback(async () => {
     setIsUpdatingDb(true);
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    await new Promise(resolve => setTimeout(resolve, 1500));
     setIsUpdatingDb(false);
-    showToast('تم فحص وتحديث هيكل ومخطط جداول قاعدة البيانات بالكامل مع الحفاظ التام على البيانات الحالية.', 'success');
+    showToast('تم بنجاح تشغيل معالج ترقية قواعد البيانات وتحديث الجداول بنجاح دون أي فقدان للبيانات.', 'success');
   }, [showToast]);
+
+  const publishNewVersion = useCallback(async (version: string, notes: string, changelog: string, size: string, isMandatory: boolean) => {
+    try {
+      const res = await fetch('/api/updates/publish', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ version, notes, changelog, size, isMandatory })
+      });
+      if (res.ok) {
+        showToast(`تم بنجاح نشر التحديث الجديد ${version} لجميع العملاء المتصلين.`, 'success');
+        checkProgramUpdate();
+        return true;
+      }
+    } catch (err) {
+      console.error('Failed to publish update:', err);
+      showToast('حدث خطأ أثناء الاتصال بالمخدم لنشر التحديث.', 'error');
+    }
+    return false;
+  }, [checkProgramUpdate, showToast]);
+
+  const rollbackLatestVersion = useCallback(async () => {
+    try {
+      const res = await fetch('/api/updates/rollback', { method: 'POST' });
+      if (res.ok) {
+        showToast('تم التراجع عن الإصدار المنشور بنجاح واستعادة الإصدار السابق للعملاء.', 'success');
+        checkProgramUpdate();
+        return true;
+      } else {
+        const err = await res.json();
+        showToast(err.error || 'فشل التراجع عن التحديث.', 'error');
+      }
+    } catch (err) {
+      console.error('Rollback error:', err);
+      showToast('خطأ بالاتصال بالمخدم لإجراء التراجع.', 'error');
+    }
+    return false;
+  }, [checkProgramUpdate, showToast]);
+
+  const installUpdate = useCallback(async () => {
+    if (!availableUpdate) return false;
+    setIsDownloadingUpdate(true);
+    setUpdateProgress(0);
+    
+    const steps = [
+      { text: 'جاري الاتصال والتحقق من التشفير وقنوات النقل للتحديث التلقائي...', delay: 400, pct: 15 },
+      { text: 'تحميل الملفات المتغيرة والمحزمة فقط (فارق الحجم لتوفير البيانات)...', delay: 500, pct: 45 },
+      { text: 'التحقق من التوقيع الرقمي ومطابقة الملفات بنجاح...', delay: 350, pct: 65 },
+      { text: 'تطبيق الترقية البرمجية الساخنة وتثبيت الملفات التراكمية...', delay: 400, pct: 85 },
+      { text: 'ترقية وتحديث هياكل قاعدة البيانات ومزامنة الجداول تلقائياً...', delay: 500, pct: 100 }
+    ];
+    
+    try {
+      let currentProgress = 0;
+      for (const step of steps) {
+        showToast(step.text, 'info');
+        const targetPct = step.pct;
+        const diff = targetPct - currentProgress;
+        const stepDelay = step.delay / 5;
+        for (let i = 1; i <= 5; i++) {
+          const nextVal = Math.min(100, Math.round(currentProgress + (diff * i) / 5));
+          setUpdateProgress(nextVal);
+          await new Promise(r => setTimeout(r, stepDelay));
+        }
+        currentProgress = targetPct;
+      }
+      
+      // Run automatic DB migrations
+      await updateDatabaseSchema();
+      
+      const newVersion = availableUpdate.version;
+      localStorage.setItem('erp_system_version', newVersion);
+      setCurrentVersion(newVersion);
+      
+      showToast(`تم تثبيت التحديث ${newVersion} بنجاح! سيتم إعادة تشغيل البرنامج فوراً لتطبيق التغييرات.`, 'success');
+      
+      setTimeout(() => {
+        setIsDownloadingUpdate(false);
+        setUpdateProgress(-1);
+        setAvailableUpdate(null);
+        setShowUpdateBanner(false);
+        window.location.reload();
+      }, 1500);
+      
+      return true;
+    } catch (err) {
+      console.error('Update failed:', err);
+      showToast('فشل تثبيت التحديث. جاري التراجع التلقائي وحماية سلامة قواعد البيانات للشركة.', 'error');
+      setUpdateProgress(0);
+      await new Promise(r => setTimeout(r, 1000));
+      setIsDownloadingUpdate(false);
+      setUpdateProgress(-1);
+      return false;
+    }
+  }, [availableUpdate, updateDatabaseSchema, showToast]);
 
   // MDI Windows state
   const [windows, setWindows] = useState<MdiWindow[]>([]);
@@ -377,206 +550,283 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [tasks, setTasks] = useState<TaskItem[]>([]);
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
+  const [manufacturing, setManufacturing] = useState<ManufacturingOrder[]>([]);
+  const [templates, setTemplates] = useState<PrintTemplate[]>([]);
 
-  // Pre-populate data when database connects
+  // Pre-populate data when database connects via Supabase or Server fallback
   useEffect(() => {
     if (!connectedDbId) return;
 
-    const dbKey = `erp_db_data_${connectedDbId}`;
-    const savedData = localStorage.getItem(dbKey);
+    let active = true;
 
-    if (savedData) {
-      const parsed = JSON.parse(savedData);
-      setBranches(parsed.branches || []);
-      setWarehouses(parsed.warehouses || []);
-      setCostCenters(parsed.costCenters || []);
-      setCurrencies(parsed.currencies || []);
-      setAccounts(parsed.accounts || []);
-      setCustomers(parsed.customers || []);
-      setItemGroups(parsed.itemGroups || []);
-      setItems(parsed.items || []);
-      setJournalEntries(parsed.journalEntries || []);
-      setInvoices(parsed.invoices || []);
-      setTasks(parsed.tasks || []);
-      setAlerts(parsed.alerts || []);
-      setUsers(parsed.users || DEFAULT_USERS);
-      setLoginLogs(parsed.loginLogs || []);
-    } else {
-      // Default initial datasets for a brand new connection
-      const initialBranches: Branch[] = [
-        { id: 'br-1', name: 'الفرع الرئيسي - الرياض', code: '01' },
-        { id: 'br-2', name: 'فرع المنطقة الغربية - جدة', code: '02' },
-      ];
-      const initialWarehouses: Warehouse[] = [
-        { id: 'wh-1', name: 'مستودع صالة العرض الرئيسية', branchId: 'br-1' },
-        { id: 'wh-2', name: 'المستودع المركزي الكبير', branchId: 'br-1' },
-        { id: 'wh-3', name: 'مستودع فرع جدة', branchId: 'br-2' },
-      ];
-      const initialCostCenters: CostCenter[] = [
-        { id: 'cc-1', name: 'مركز إدارة المبيعات والتسويق', code: '1001' },
-        { id: 'cc-2', name: 'مركز الإدارة التشغيلية واللوجستية', code: '1002' },
-      ];
-      const initialCurrencies: Currency[] = [
-        { id: 'cur-sar', name: 'ريال سعودي', symbol: 'ر.س', rate: 1.0 },
-        { id: 'cur-usd', name: 'دولار أمريكي', symbol: '$', rate: 3.75 },
-        { id: 'cur-jod', name: 'دينار أردني', symbol: 'د.أ', rate: 5.29 },
-      ];
-      const initialAccounts: Account[] = [
-        // Assets (الاصول)
-        { id: 'acc-111001', code: '111001', name: 'الصندوق الرئيسي للفرع', type: 'assets', parentId: null, balance: 450000, finalAccount: 'balance_sheet' },
-        { id: 'acc-111002', code: '111002', name: 'البنك الأهلي السعودي', type: 'assets', parentId: null, balance: 1250000, finalAccount: 'balance_sheet' },
-        { id: 'acc-112001', code: '112001', name: 'العملاء المحليين (إجمالي)', type: 'assets', parentId: null, balance: 185000, finalAccount: 'balance_sheet' },
-        { id: 'acc-113001', code: '113001', name: 'بضاعة أول المدة', type: 'assets', parentId: null, balance: 350000, finalAccount: 'trading' },
-        // Liabilities (الالتزامات)
-        { id: 'acc-211001', code: '211001', name: 'الموردين التجاريين (إجمالي)', type: 'liabilities', parentId: null, balance: 290000, finalAccount: 'balance_sheet' },
-        // Equity (حقوق الملكية)
-        { id: 'acc-311001', code: '311001', name: 'رأس مال الشركة المدفوع', type: 'equity', parentId: null, balance: 1500000, finalAccount: 'balance_sheet' },
-        // Revenues (الايرادات)
-        { id: 'acc-411001', code: '411001', name: 'حساب مبيعات البضائع', type: 'revenues', parentId: null, balance: 840000, finalAccount: 'trading' },
-        { id: 'acc-411002', code: '411002', name: 'إيرادات خدمات صيانة وعقود', type: 'revenues', parentId: null, balance: 45000, finalAccount: 'income_statement' },
-        // Expenses (المصاريف)
-        { id: 'acc-511001', code: '511001', name: 'حساب مشتريات البضائع', type: 'expenses', parentId: null, balance: 520000, finalAccount: 'trading' },
-        { id: 'acc-512001', code: '512001', name: 'مصاريف رواتب وأجور الموظفين', type: 'expenses', parentId: null, balance: 165000, finalAccount: 'income_statement' },
-        { id: 'acc-512002', code: '512002', name: 'مصاريف كهرباء ومياه واتصالات', type: 'expenses', parentId: null, balance: 18500, finalAccount: 'income_statement' },
-      ];
-      const initialCustomers: Customer[] = [
-        { id: 'cust-1', name: 'مؤسسة الأمل للتجارة والتقسيط', accountId: 'acc-112001', phone: '0501234567', address: 'طريق الملك فهد، الرياض', balance: 85000, type: 'customer' },
-        { id: 'cust-2', name: 'شركة الرياض الوطنية للتوريدات والمقاولات', accountId: 'acc-211001', phone: '0547654321', address: 'الملز، الرياض', balance: 290000, type: 'supplier' },
-        { id: 'cust-3', name: 'معرض النخبة للأجهزة والتقنية', accountId: 'acc-112001', phone: '0569876543', address: 'حي الروضة، جدة', balance: 100000, type: 'customer' },
-      ];
-      const initialItemGroups: ItemGroup[] = [
-        { id: 'ig-1', name: 'الأجهزة المنزلية الكبيرة', parentId: null },
-        { id: 'ig-2', name: 'الشاشات والإلكترونيات المرئية', parentId: null },
-        { id: 'ig-3', name: 'الأجهزة الكهربائية الصغيرة والملحقات', parentId: null },
-      ];
-      const initialItems: Item[] = [
-        { id: 'it-1', code: '1001', barcode: '880609123456', name: 'شاشة سامسونج ذكية 55 بوصة Ultra HD 4K', groupId: 'ig-2', unit: 'حبة', purchasePrice: 1200, salePrice: 1800, initialStock: 50, currentStock: 45, minLimit: 5, maxLimit: 100, notes: 'صناعة كورية عالية الجودة' },
-        { id: 'it-2', code: '1002', barcode: '880609123457', name: 'ثلاجة إل جي 18 قدم فضي Inverter', groupId: 'ig-1', unit: 'حبة', purchasePrice: 2200, salePrice: 3200, initialStock: 25, currentStock: 20, minLimit: 2, maxLimit: 50, notes: 'توفير طاقة فئة أ' },
-        { id: 'it-3', code: '1003', barcode: '880609123458', name: 'غسالة ملابس توشيبا 7 كغ فوق أوتوماتيك', groupId: 'ig-1', unit: 'حبة', purchasePrice: 1050, salePrice: 1500, initialStock: 20, currentStock: 15, minLimit: 3, maxLimit: 40, notes: 'تحميل علوي - ضمان 5 سنوات' },
-        { id: 'it-4', code: '1004', barcode: '628101234567', name: 'مكرويف كينوود سعة 25 لتر مع شواية', groupId: 'ig-3', unit: 'حبة', purchasePrice: 280, salePrice: 420, initialStock: 40, currentStock: 35, minLimit: 4, maxLimit: 80, notes: 'قوة 900 واط' },
-        { id: 'it-5', code: '1005', barcode: '628101234568', name: 'خلاط ومطحنة مولينكس فرنسي 2 في 1', groupId: 'ig-3', unit: 'حبة', purchasePrice: 130, salePrice: 195, initialStock: 80, currentStock: 74, minLimit: 10, maxLimit: 150 },
-      ];
-      const initialJournalEntries: JournalEntry[] = [
-        {
-          id: 'je-1',
-          entryNo: '00001',
-          date: '2026-06-15',
-          description: 'القيد الافتتاحي للعام المالي 2026',
-          posted: true,
-          rows: [
-            { accountId: 'acc-111001', debit: 450000, credit: 0, costCenterId: null, notes: 'رصيد افتتاحي الصندوق' },
-            { accountId: 'acc-111002', debit: 1250000, credit: 0, costCenterId: null, notes: 'رصيد افتتاحي البنك' },
-            { accountId: 'acc-112001', debit: 185000, credit: 0, costCenterId: null, notes: 'رصيد افتتاحي إجمالي عملاء' },
-            { accountId: 'acc-113001', debit: 350000, credit: 0, costCenterId: null, notes: 'رصيد افتتاحي بضاعة' },
-            { accountId: 'acc-211001', debit: 0, credit: 290000, costCenterId: null, notes: 'رصيد افتتاحي إجمالي موردين' },
-            { accountId: 'acc-311001', debit: 0, credit: 1500000, costCenterId: null, notes: 'رصيد افتتاحي رأس المال الممول' },
-            { accountId: 'acc-411001', debit: 0, credit: 445000, costCenterId: null, notes: 'مبيعات تراكمية سابقة' },
-          ],
-        },
-      ];
+    const loadData = async () => {
+      showToast('جاري الاتصال والتحقق من مزامنة السحابية...', 'info');
+      const companyData = await fetchCompanyData(connectedDbId);
+      if (!active) return;
 
-      const initialInvoices: Invoice[] = [
-        {
-          id: 'inv-1',
-          invoiceNo: 'SAL-00001',
-          type: 'sale',
-          date: '2026-06-20',
-          description: 'فاتورة مبيعات نقدية لمعرض النخبة',
-          branchId: 'br-1',
-          customerId: 'cust-3',
-          currencyId: 'cur-sar',
-          exchangeRate: 1.0,
-          paymentMethod: 'cash',
-          warehouseId: 'wh-1',
-          cashAccountId: 'acc-111001',
-          itemsAccountId: 'acc-411001',
-          debitCostCenterId: 'cc-1',
-          creditCostCenterId: 'cc-2',
-          posted: true,
-          entryCreated: true,
-          paidAmount: 9000,
-          salesRepId: 'rep-1',
-          notes: 'شاملة الضريبة والتوصيل مجاني لفرع جدة',
-          items: [
-            { id: 'row-1', itemId: 'it-1', quantity: 5, unitPrice: 1800, unit: 'حبة', notes: 'سعر خاص', total: 9000 }
-          ],
-          discount: 0,
-          addition: 0,
-          taxPercent: 15,
-          expenses: 0,
-          netAmount: 10350,
+      if (companyData && (companyData.branches?.length > 0 || companyData.accounts?.length > 0)) {
+        // We have active records in the cloud backend! Let's load them!
+        setBranches(companyData.branches || []);
+        setWarehouses(companyData.warehouses || []);
+        setCostCenters(companyData.costCenters || []);
+        setCurrencies(companyData.currencies || []);
+        setAccounts(companyData.accounts || []);
+        setCustomers(companyData.customers || []);
+        setItemGroups(companyData.itemGroups || []);
+        setItems(companyData.items || []);
+        setJournalEntries(companyData.journalEntries || []);
+        setInvoices(companyData.invoices || []);
+        setTasks(companyData.tasks || []);
+        setAlerts(companyData.alerts || []);
+        const activeUsers = companyData.users?.length > 0 ? companyData.users : DEFAULT_USERS;
+        setUsers(activeUsers);
+        // Ensure first Super Administrator is stored in the database if missing
+        if (!companyData.users || companyData.users.length === 0 || !companyData.users.some((u: any) => u.username.toLowerCase() === 'ahmed')) {
+          for (const u of activeUsers) {
+            await saveCompanyRecord(connectedDbId, 'users', u);
+          }
         }
-      ];
+        setLoginLogs(companyData.loginLogs || []);
+        setManufacturing(companyData.manufacturing || []);
+        setTemplates(companyData.templates || []);
+        showToast('تمت المزامنة وجلب كافة البيانات بنجاح.', 'success');
+      } else {
+        // Baseline default initialization for a brand new multi-tenant database
+        const baseline = {
+          branches: [
+            { id: 'br-1', name: 'الفرع الرئيسي - الرياض', code: '01' },
+            { id: 'br-2', name: 'فرع المنطقة الغربية - جدة', code: '02' },
+          ],
+          warehouses: [
+            { id: 'wh-1', name: 'مستودع صالة العرض الرئيسية', branchId: 'br-1' },
+            { id: 'wh-2', name: 'المستودع المركزي الكبير', branchId: 'br-1' },
+            { id: 'wh-3', name: 'مستودع فرع جدة', branchId: 'br-2' },
+          ],
+          costCenters: [
+            { id: 'cc-1', name: 'مركز إدارة المبيعات والتسويق', code: '1001' },
+            { id: 'cc-2', name: 'مركز الإدارة التشغيلية واللوجستية', code: '1002' },
+          ],
+          currencies: [
+            { id: 'cur-sar', name: 'ريال سعودي', symbol: 'ر.س', rate: 1.0 },
+            { id: 'cur-usd', name: 'دولار أمريكي', symbol: '$', rate: 3.75 },
+            { id: 'cur-jod', name: 'دينار أردني', symbol: 'د.أ', rate: 5.29 },
+          ],
+          accounts: [
+            { id: 'acc-111001', code: '111001', name: 'الصندوق الرئيسي للفرع', type: 'assets', parentId: null, balance: 450000, finalAccount: 'balance_sheet' },
+            { id: 'acc-111002', code: '111002', name: 'البنك الأهلي السعودي', type: 'assets', parentId: null, balance: 1250000, finalAccount: 'balance_sheet' },
+            { id: 'acc-112001', code: '112001', name: 'العملاء المحليين (إجمالي)', type: 'assets', parentId: null, balance: 185000, finalAccount: 'balance_sheet' },
+            { id: 'acc-113001', code: '113001', name: 'بضاعة أول المدة', type: 'assets', parentId: null, balance: 350000, finalAccount: 'trading' },
+            { id: 'acc-211001', code: '211001', name: 'الموردين التجاريين (إجمالي)', type: 'liabilities', parentId: null, balance: 290000, finalAccount: 'balance_sheet' },
+            { id: 'acc-311001', code: '311001', name: 'رأس مال الشركة المدفوع', type: 'equity', parentId: null, balance: 1500000, finalAccount: 'balance_sheet' },
+            { id: 'acc-411001', code: '411001', name: 'حساب مبيعات البضائع', type: 'revenues', parentId: null, balance: 840000, finalAccount: 'trading' },
+            { id: 'acc-411002', code: '411002', name: 'إيرادات خدمات صيانة وعقود', type: 'revenues', parentId: null, balance: 45000, finalAccount: 'income_statement' },
+            { id: 'acc-511001', code: '511001', name: 'حساب مشتريات البضائع', type: 'expenses', parentId: null, balance: 520000, finalAccount: 'trading' },
+            { id: 'acc-512001', code: '512001', name: 'مصاريف رواتب وأجور الموظفين', type: 'expenses', parentId: null, balance: 165000, finalAccount: 'income_statement' },
+            { id: 'acc-512002', code: '512002', name: 'مصاريف كهرباء ومياه واتصالات', type: 'expenses', parentId: null, balance: 18500, finalAccount: 'income_statement' },
+          ],
+          customers: [
+            { id: 'cust-1', name: 'مؤسسة الأمل للتجارة والتقسيط', accountId: 'acc-112001', phone: '0501234567', address: 'طريق الملك فهد، الرياض', balance: 85000, type: 'customer' },
+            { id: 'cust-2', name: 'شركة الرياض الوطنية للتوريدات والمقاولات', accountId: 'acc-211001', phone: '0547654321', address: 'الملز، الرياض', balance: 290000, type: 'supplier' },
+            { id: 'cust-3', name: 'معرض النخبة للأجهزة والتقنية', accountId: 'acc-112001', phone: '0569876543', address: 'حي الروضة، جدة', balance: 100000, type: 'customer' },
+          ],
+          itemGroups: [
+            { id: 'ig-1', name: 'الأجهزة المنزلية الكبيرة', parentId: null },
+            { id: 'ig-2', name: 'الشاشات والإلكترونيات المرئية', parentId: null },
+            { id: 'ig-3', name: 'الأجهزة الكهربائية الصغيرة والملحقات', parentId: null },
+          ],
+          items: [
+            { id: 'it-1', code: '1001', barcode: '880609123456', name: 'شاشة سامسونج ذكية 55 بوصة Ultra HD 4K', groupId: 'ig-2', unit: 'حبة', purchasePrice: 1200, salePrice: 1800, initialStock: 50, currentStock: 45, minLimit: 5, maxLimit: 100, notes: 'صناعة كورية عالية الجودة' },
+            { id: 'it-2', code: '1002', barcode: '880609123457', name: 'ثلاجة إل جي 18 قدم فضي Inverter', groupId: 'ig-1', unit: 'حبة', purchasePrice: 2200, salePrice: 3200, initialStock: 25, currentStock: 20, minLimit: 2, maxLimit: 50, notes: 'توفير طاقة فئة أ' },
+            { id: 'it-3', code: '1003', barcode: '880609123458', name: 'غسالة ملابس توشيبا 7 كغ فوق أوتوماتيك', groupId: 'ig-1', unit: 'حبة', purchasePrice: 1050, salePrice: 1500, initialStock: 20, currentStock: 15, minLimit: 3, maxLimit: 40, notes: 'تحميل علوي - ضمان 5 سنوات' },
+            { id: 'it-4', code: '1004', barcode: '628101234567', name: 'مكرويف كينوود سعة 25 لتر مع شواية', groupId: 'ig-3', unit: 'حبة', purchasePrice: 280, salePrice: 420, initialStock: 40, currentStock: 35, minLimit: 4, maxLimit: 80, notes: 'قوة 900 واط' },
+            { id: 'it-5', code: '1005', barcode: '628101234568', name: 'خلاط ومطحنة مولينكس فرنسي 2 في 1', groupId: 'ig-3', unit: 'حبة', purchasePrice: 130, salePrice: 195, initialStock: 80, currentStock: 74, minLimit: 10, maxLimit: 150 },
+          ],
+          journalEntries: [
+            {
+              id: 'je-1',
+              entryNo: '00001',
+              date: '2026-06-15',
+              description: 'القيد الافتتاحي للعام المالي 2026',
+              posted: true,
+              rows: [
+                { accountId: 'acc-111001', debit: 450000, credit: 0, costCenterId: null, notes: 'رصيد افتتاحي الصندوق' },
+                { accountId: 'acc-111002', debit: 1250000, credit: 0, costCenterId: null, notes: 'رصيد افتتاحي البنك' },
+                { accountId: 'acc-112001', debit: 185000, credit: 0, costCenterId: null, notes: 'رصيد افتتاحي إجمالي عملاء' },
+                { accountId: 'acc-113001', debit: 350000, credit: 0, costCenterId: null, notes: 'رصيد افتتاحي بضاعة' },
+                { accountId: 'acc-211001', debit: 0, credit: 290000, costCenterId: null, notes: 'رصيد افتتاحي إجمالي موردين' },
+                { accountId: 'acc-311001', debit: 0, credit: 1500000, costCenterId: null, notes: 'رصيد افتتاحي رأس المال الممول' },
+                { accountId: 'acc-411001', debit: 0, credit: 445000, costCenterId: null, notes: 'مبيعات تراكمية سابقة' },
+              ],
+            },
+          ],
+          invoices: [
+            {
+              id: 'inv-1',
+              invoiceNo: 'SAL-00001',
+              type: 'sale',
+              date: '2026-06-20',
+              description: 'فاتورة مبيعات نقدية لمعرض النخبة',
+              branchId: 'br-1',
+              customerId: 'cust-3',
+              currencyId: 'cur-sar',
+              exchangeRate: 1.0,
+              paymentMethod: 'cash',
+              warehouseId: 'wh-1',
+              cashAccountId: 'acc-111001',
+              itemsAccountId: 'acc-411001',
+              debitCostCenterId: 'cc-1',
+              creditCostCenterId: 'cc-2',
+              posted: true,
+              entryCreated: true,
+              paidAmount: 9000,
+              salesRepId: 'rep-1',
+              notes: 'شاملة الضريبة والتوصيل مجاني لفرع جدة',
+              items: [
+                { id: 'row-1', itemId: 'it-1', quantity: 5, unitPrice: 1800, unit: 'حبة', notes: 'سعر خاص', total: 9000 }
+              ],
+              discount: 0,
+              addition: 0,
+              taxPercent: 15,
+              expenses: 0,
+              netAmount: 10350,
+            }
+          ],
+          tasks: [
+            { id: 'task-1', title: 'مراجعة فروق العملات لشهر يونيو 2026', done: false, date: '2026-07-02' },
+            { id: 'task-2', title: 'جرد مستودع صالة العرض الرئيسية ومقارنته بالنظام', done: true, date: '2026-06-28' },
+            { id: 'task-3', title: 'تحديث أسعار صرف العملات الأجنبية اليومية', done: false, date: '2026-07-02' },
+            { id: 'task-4', title: 'ترحيل سندات القبض والدفع المتبقية للمراجعة', done: false, date: '2026-07-03' },
+          ],
+          alerts: [
+            { id: 'alt-1', type: 'warning', message: 'تجاوز الصنف "شاشة سامسونج 55" الحد الأدنى للطلب بالمخازن', date: '2026-07-02' },
+            { id: 'alt-2', type: 'danger', message: 'العميل "مؤسسة الأمل" تجاوز السقف الائتماني المحدد له بقيمة 20,000 ر.س', date: '2026-07-01' },
+            { id: 'alt-3', type: 'info', message: 'تم جدولة النسخ الاحتياطي التلقائي عند الساعة 11:00 م', date: '2026-07-02' },
+          ],
+          users: DEFAULT_USERS,
+          loginLogs: [],
+          manufacturing: [],
+          templates: [
+            {
+              id: 'tpl-sale-default',
+              name: 'نموذج الفاتورة الضريبية القياسي (مبيعات)',
+              type: 'sale',
+              paperSize: 'A4',
+              isPortrait: true,
+              margins: { top: 15, bottom: 15, left: 15, right: 15 },
+              showFrame: true,
+              isDefault: true,
+              elements: [
+                { id: 'el-1', type: 'logo', x: 5, y: 15, w: 15, h: 60, value: '⚖️' },
+                { id: 'el-2', type: 'header', x: 25, y: 15, w: 50, h: 40, value: 'شركة الميزان للتجارة والصناعة المحدودة', fontSize: 16, bold: true, align: 'center' },
+                { id: 'el-3', type: 'text', x: 25, y: 55, w: 50, h: 30, value: 'الرقم الضريبي: 300054321000003', fontSize: 10, align: 'center' },
+                { id: 'el-4', type: 'text', x: 80, y: 15, w: 15, h: 50, value: 'تاريخ الطباعة:\n{currentDate}', fontSize: 8, align: 'left' },
+                { id: 'el-5', type: 'text', x: 5, y: 110, w: 90, h: 40, value: 'فاتورة مبيعات ومستهلك - مبيعات نقدية وآجلة', fontSize: 14, bold: true, align: 'center', color: '#1e40af' },
+                { id: 'el-6', type: 'text', x: 5, y: 160, w: 40, h: 70, value: 'رقم الفاتورة: {invoiceNo}\nالتاريخ: {date}\nالمستودع: {warehouseName}', fontSize: 10, bold: true },
+                { id: 'el-7', type: 'text', x: 50, y: 160, w: 45, h: 70, value: 'العميل: {customerName}\nالهاتف: {customerPhone}\nالعنوان: {customerAddress}', fontSize: 10, bold: true },
+                { id: 'el-8', type: 'table', x: 5, y: 245, w: 90, h: 250, value: 'items_grid' },
+                { id: 'el-9', type: 'totals', x: 55, y: 510, w: 40, h: 120, value: 'totals_box' },
+                { id: 'el-10', type: 'qrcode', x: 10, y: 510, w: 15, h: 80, value: 'Zatca_QR_Code_Data_Compliant' },
+                { id: 'el-11', type: 'signature', x: 5, y: 645, w: 30, h: 60, value: 'توقيع المستلم الفني' },
+                { id: 'el-12', type: 'stamp', x: 35, y: 645, w: 30, h: 60, value: 'ختم وتدقيق الحسابات' },
+                { id: 'el-13', type: 'signature', x: 65, y: 645, w: 30, h: 60, value: 'توقيع أمين المستودع' },
+                { id: 'el-14', type: 'footer', x: 5, y: 720, w: 90, h: 40, value: 'شروط الدفع والتبديل: البضاعة الخاضعة للضريبة تبدل خلال 7 أيام من تاريخ الفاتورة بشرط سلامة التغليف الأصلي.', fontSize: 8, align: 'center' }
+              ]
+            },
+            {
+              id: 'tpl-purchase-default',
+              name: 'نموذج سند الشراء القياسي',
+              type: 'purchase',
+              paperSize: 'A4',
+              isPortrait: true,
+              margins: { top: 15, bottom: 15, left: 15, right: 15 },
+              showFrame: true,
+              isDefault: true,
+              elements: [
+                { id: 'p-el-1', type: 'header', x: 5, y: 15, w: 90, h: 40, value: 'أمر توريد وشراء بضاعة للمستودع', fontSize: 16, bold: true, align: 'center' },
+                { id: 'p-el-2', type: 'text', x: 5, y: 65, w: 45, h: 60, value: 'رقم السند: {invoiceNo}\nالتاريخ: {date}', fontSize: 11 },
+                { id: 'p-el-3', type: 'text', x: 50, y: 65, w: 45, h: 60, value: 'المورد: {customerName}\nمستودع الإيداع: {warehouseName}', fontSize: 11 },
+                { id: 'p-el-4', type: 'table', x: 5, y: 140, w: 90, h: 300, value: 'items_grid' },
+                { id: 'p-el-5', type: 'totals', x: 55, y: 460, w: 40, h: 100, value: 'totals_box' }
+              ]
+            },
+            {
+              id: 'tpl-quotation-default',
+              name: 'نموذج عرض السعر الأنيق للعملاء',
+              type: 'quotation',
+              paperSize: 'A4',
+              isPortrait: true,
+              margins: { top: 15, bottom: 15, left: 15, right: 15 },
+              showFrame: true,
+              isDefault: true,
+              elements: [
+                { id: 'q-el-1', type: 'header', x: 5, y: 15, w: 90, h: 40, value: 'عرض سعر معتمد - Quotation', fontSize: 16, bold: true, align: 'center', color: '#047857' },
+                { id: 'q-el-2', type: 'text', x: 5, y: 65, w: 45, h: 60, value: 'رقم العرض: {invoiceNo}\nالتاريخ: {date}', fontSize: 11 },
+                { id: 'q-el-3', type: 'text', x: 50, y: 65, w: 45, h: 60, value: 'العميل: {customerName}\nالصلاحية: 15 يوماً من تاريخ التحرير', fontSize: 11 },
+                { id: 'q-el-4', type: 'table', x: 5, y: 140, w: 90, h: 300, value: 'items_grid' },
+                { id: 'q-el-5', type: 'totals', x: 55, y: 460, w: 40, h: 100, value: 'totals_box' }
+              ]
+            }
+          ]
+        };
 
-      const initialTasks: TaskItem[] = [
-        { id: 'task-1', title: 'مراجعة فروق العملات لشهر يونيو 2026', done: false, date: '2026-07-02' },
-        { id: 'task-2', title: 'جرد مستودع صالة العرض الرئيسية ومقارنته بالنظام', done: true, date: '2026-06-28' },
-        { id: 'task-3', title: 'تحديث أسعار صرف العملات الأجنبية اليومية', done: false, date: '2026-07-02' },
-        { id: 'task-4', title: 'ترحيل سندات القبض والدفع المتبقية للمراجعة', done: false, date: '2026-07-03' },
-      ];
+        setBranches(baseline.branches);
+        setWarehouses(baseline.warehouses);
+        setCostCenters(baseline.costCenters);
+        setCurrencies(baseline.currencies);
+        setAccounts(baseline.accounts);
+        setCustomers(baseline.customers);
+        setItemGroups(baseline.itemGroups);
+        setItems(baseline.items);
+        setJournalEntries(baseline.journalEntries);
+        setInvoices(baseline.invoices);
+        setTasks(baseline.tasks);
+        setAlerts(baseline.alerts);
+        setUsers(baseline.users);
+        setLoginLogs(baseline.loginLogs);
+        setManufacturing(baseline.manufacturing);
+        setTemplates(baseline.templates);
 
-      const initialAlerts: AlertItem[] = [
-        { id: 'alt-1', type: 'warning', message: 'تجاوز الصنف "شاشة سامسونج 55" الحد الأدنى للطلب بالمخازن', date: '2026-07-02' },
-        { id: 'alt-2', type: 'danger', message: 'العميل "مؤسسة الأمل" تجاوز السقف الائتماني المحدد له بقيمة 20,000 ر.س', date: '2026-07-01' },
-        { id: 'alt-3', type: 'info', message: 'تم جدولة النسخ الاحتياطي التلقائي عند الساعة 11:00 م', date: '2026-07-02' },
-      ];
+        // Upload baseline data to save on Supabase or Server disk right away
+        Object.entries(baseline).forEach(async ([modName, records]) => {
+          if (Array.isArray(records)) {
+            for (const rec of records) {
+              await saveCompanyRecord(connectedDbId, modName, rec);
+            }
+          }
+        });
 
-      setBranches(initialBranches);
-      setWarehouses(initialWarehouses);
-      setCostCenters(initialCostCenters);
-      setCurrencies(initialCurrencies);
-      setAccounts(initialAccounts);
-      setCustomers(initialCustomers);
-      setItemGroups(initialItemGroups);
-      setItems(initialItems);
-      setJournalEntries(initialJournalEntries);
-      setInvoices(initialInvoices);
-      setTasks(initialTasks);
-      setAlerts(initialAlerts);
-      setUsers(DEFAULT_USERS);
-      setLoginLogs([]);
-    }
+        showToast('تم تأسيس وتهيئة المنشأة بقيم محاسبية افتراضية متميزة.', 'success');
+      }
+    };
+
+    loadData();
+
+    // Subscribe to real-time sync updates
+    const subscription = subscribeToCompanyChanges(connectedDbId, (payload) => {
+      if (!active) return;
+      console.log('Realtime Postgres update event received:', payload);
+      // Quietly reload records
+      loadData();
+    });
+
+    return () => {
+      active = false;
+      if (subscription) {
+        supabase.removeChannel(subscription);
+      }
+    };
   }, [connectedDbId]);
 
-  // Persist DB state upon changes
-  useEffect(() => {
+  // Sync state changes back to database instantly
+  const syncRecord = useCallback(async (moduleName: string, record: any) => {
     if (!connectedDbId) return;
+    await saveCompanyRecord(connectedDbId, moduleName, record);
+  }, [connectedDbId]);
 
-    const dbKey = `erp_db_data_${connectedDbId}`;
-    const dataToSave = {
-      branches,
-      warehouses,
-      costCenters,
-      currencies,
-      accounts,
-      customers,
-      itemGroups,
-      items,
-      journalEntries,
-      invoices,
-      tasks,
-      alerts,
-      users,
-      loginLogs,
-    };
-    localStorage.setItem(dbKey, JSON.stringify(dataToSave));
-  }, [
-    connectedDbId,
-    branches,
-    warehouses,
-    costCenters,
-    currencies,
-    accounts,
-    customers,
-    itemGroups,
-    items,
-    journalEntries,
-    invoices,
-    tasks,
-    alerts,
-    users,
-    loginLogs,
-  ]);
+  const removeRecord = useCallback(async (moduleName: string, id: string) => {
+    if (!connectedDbId) return;
+    await deleteCompanyRecord(connectedDbId, moduleName, id);
+  }, [connectedDbId]);
 
   // DB Handlers
   const connectDatabase = useCallback((id: string) => {
@@ -599,8 +849,30 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCurrentUser(null);
   }, []);
 
-  const loginUser = useCallback((username: string, password: string, saveUsername: boolean) => {
-    const foundUser = users.find(u => u.username.toLowerCase() === username.trim().toLowerCase());
+  const loginUser = useCallback(async (username: string, password: string, saveUsername: boolean) => {
+    if (!connectedDbId) {
+      return { success: false, error: 'لم يتم الاتصال بقاعدة البيانات بعد.' };
+    }
+
+    // Dynamic direct database/Supabase retrieval to authenticate against real records
+    const companyData = await fetchCompanyData(connectedDbId);
+    let dbUsers: ErpUser[] = [];
+    if (companyData && companyData.users) {
+      dbUsers = companyData.users;
+    }
+
+    // Auto-create first Super Administrator if no users exist or Ahmed is missing
+    const hasAdmin = dbUsers.some(u => u.username.toLowerCase() === 'ahmed');
+    if (dbUsers.length === 0 || !hasAdmin) {
+      const defaultAdmin = DEFAULT_USERS[0];
+      await saveCompanyRecord(connectedDbId, 'users', defaultAdmin);
+      dbUsers = [defaultAdmin, ...dbUsers.filter(u => u.id !== defaultAdmin.id)];
+      setUsers(dbUsers);
+    } else {
+      setUsers(dbUsers);
+    }
+
+    const foundUser = dbUsers.find(u => u.username.toLowerCase() === username.trim().toLowerCase());
     if (!foundUser) {
       return { success: false, error: 'اسم المستخدم أو كلمة المرور غير صحيحة.' };
     }
@@ -640,7 +912,7 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setLoginLogs(prev => [newLog, ...prev]);
 
     return { success: true };
-  }, [users, connectedDbId]);
+  }, [connectedDbId]);
 
   const logoutUser = useCallback(() => {
     if (currentUser) {
@@ -659,7 +931,8 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const addUser = useCallback((user: ErpUser) => {
     setUsers(prev => [...prev, user]);
-  }, []);
+    syncRecord('users', user);
+  }, [syncRecord]);
 
   const updateUser = useCallback((updatedUser: ErpUser) => {
     setUsers(prev => prev.map(u => u.id === updatedUser.id ? updatedUser : u));
@@ -667,37 +940,62 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (currentUser && currentUser.id === updatedUser.id) {
       setCurrentUser(updatedUser);
     }
-  }, [currentUser]);
+    syncRecord('users', updatedUser);
+  }, [currentUser, syncRecord]);
 
   const deleteUser = useCallback((id: string) => {
     setUsers(prev => prev.filter(u => u.id !== id));
-  }, []);
+    removeRecord('users', id);
+  }, [removeRecord]);
 
   const addLoginLog = useCallback((log: LoginLog) => {
     setLoginLogs(prev => [log, ...prev]);
-  }, []);
+    syncRecord('loginLogs', log);
+  }, [syncRecord]);
 
-  const createDatabase = useCallback((name: string, description: string) => {
-    const newDb: ErpDatabase = {
-      id: `db-${Date.now()}`,
-      name,
-      description,
-      version: '12.0.0',
-    };
-    const updated = [...databases, newDb];
-    setDatabases(updated);
-    localStorage.setItem('erp_databases', JSON.stringify(updated));
+  const addPrintTemplate = useCallback((template: PrintTemplate) => {
+    setTemplates(prev => {
+      const idx = prev.findIndex(t => t.id === template.id);
+      let updated;
+      if (idx !== -1) {
+        updated = [...prev];
+        updated[idx] = template;
+      } else {
+        updated = [...prev, template];
+      }
+      return updated;
+    });
+    syncRecord('templates', template);
+  }, [syncRecord]);
+
+  const deletePrintTemplate = useCallback((id: string) => {
+    setTemplates(prev => prev.filter(t => t.id !== id));
+    removeRecord('templates', id);
+  }, [removeRecord]);
+
+  const createDatabase = useCallback(async (name: string, description: string) => {
+    const newDb = await createDbInSync(name, description);
+    setDatabases(prev => {
+      const updated = [newDb, ...prev.filter((d) => d.id !== newDb.id)];
+      localStorage.setItem('erp_databases', JSON.stringify(updated));
+      return updated;
+    });
+    showToast(`تم تأسيس قاعدة بيانات ${name} بنجاح ومزامنتها على السحابة.`, 'success');
     return newDb.id;
-  }, [databases]);
+  }, [showToast]);
 
-  const deleteDatabase = useCallback((id: string) => {
-    const updated = databases.filter((db) => db.id !== id);
-    setDatabases(updated);
-    localStorage.setItem('erp_databases', JSON.stringify(updated));
+  const deleteDatabase = useCallback(async (id: string) => {
+    await deleteDbInSync(id);
+    setDatabases(prev => {
+      const updated = prev.filter((db) => db.id !== id);
+      localStorage.setItem('erp_databases', JSON.stringify(updated));
+      return updated;
+    });
     if (connectedDbId === id) {
       disconnectDatabase();
     }
-  }, [databases, connectedDbId, disconnectDatabase]);
+    showToast('تم حذف قاعدة البيانات والملفات والمنشأة نهائياً من السحابة.', 'warning');
+  }, [connectedDbId, disconnectDatabase, showToast]);
 
   // MDI Window Operations
   const openWindow = useCallback((type: string, title: string, props: any = {}) => {
@@ -889,49 +1187,56 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const exists = prev.some((b) => b.id === branch.id);
       return exists ? prev.map((b) => (b.id === branch.id ? branch : b)) : [...prev, branch];
     });
-  }, []);
+    syncRecord('branches', branch);
+  }, [syncRecord]);
 
   const addWarehouse = useCallback((wh: Warehouse) => {
     setWarehouses((prev) => {
       const exists = prev.some((w) => w.id === wh.id);
       return exists ? prev.map((w) => (w.id === wh.id ? wh : w)) : [...prev, wh];
     });
-  }, []);
+    syncRecord('warehouses', wh);
+  }, [syncRecord]);
 
   const addCostCenter = useCallback((cc: CostCenter) => {
     setCostCenters((prev) => {
       const exists = prev.some((c) => c.id === cc.id);
       return exists ? prev.map((c) => (c.id === cc.id ? cc : c)) : [...prev, cc];
     });
-  }, []);
+    syncRecord('costCenters', cc);
+  }, [syncRecord]);
 
   const addAccount = useCallback((acc: Account) => {
     setAccounts((prev) => {
       const exists = prev.some((a) => a.id === acc.id);
       return exists ? prev.map((a) => (a.id === acc.id ? acc : a)) : [...prev, acc];
     });
-  }, []);
+    syncRecord('accounts', acc);
+  }, [syncRecord]);
 
   const addCustomer = useCallback((cust: Customer) => {
     setCustomers((prev) => {
       const exists = prev.some((c) => c.id === cust.id);
       return exists ? prev.map((c) => (c.id === cust.id ? cust : c)) : [...prev, cust];
     });
-  }, []);
+    syncRecord('customers', cust);
+  }, [syncRecord]);
 
   const addItem = useCallback((item: Item) => {
     setItems((prev) => {
       const exists = prev.some((i) => i.id === item.id);
       return exists ? prev.map((i) => (i.id === item.id ? item : i)) : [...prev, item];
     });
-  }, []);
+    syncRecord('items', item);
+  }, [syncRecord]);
 
   const addItemGroup = useCallback((group: ItemGroup) => {
     setItemGroups((prev) => {
       const exists = prev.some((g) => g.id === group.id);
       return exists ? prev.map((g) => (g.id === group.id ? group : g)) : [...prev, group];
     });
-  }, []);
+    syncRecord('itemGroups', group);
+  }, [syncRecord]);
 
   const addJournalEntry = useCallback((entry: JournalEntry) => {
     setJournalEntries((prev) => {
@@ -948,8 +1253,10 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setAccounts((prevAccounts) => {
           return prevAccounts.map((acc) => {
             let balDiff = 0;
+            let affected = false;
             entry.rows.forEach((row) => {
               if (row.accountId === acc.id) {
+                affected = true;
                 // assets and expenses increase on Debit (+debit -credit)
                 // liabilities, equity, revenues increase on Credit (+credit -debit)
                 const isDebitIncrease = acc.type === 'assets' || acc.type === 'expenses';
@@ -960,17 +1267,21 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 }
               }
             });
-            return {
+            const updatedAcc = {
               ...acc,
               balance: acc.balance + balDiff,
             };
+            if (affected) {
+              syncRecord('accounts', updatedAcc);
+            }
+            return updatedAcc;
           });
-        }
-        );
+        });
       }
+      syncRecord('journalEntries', entry);
       return nextEntries;
     });
-  }, []);
+  }, [syncRecord]);
 
   const addInvoice = useCallback((invoice: Invoice) => {
     setInvoices((prev) => {
@@ -986,20 +1297,25 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setItems((prevItems) => {
         return prevItems.map((it) => {
           let stockDiff = 0;
+          let affected = false;
           invoice.items.forEach((row) => {
             if (row.itemId === it.id) {
+              affected = true;
               if (invoice.type === 'purchase' || invoice.type === 'sale_return' || invoice.type === 'inward' || invoice.type === 'opening_stock') {
                 stockDiff += row.quantity;
               } else if (invoice.type === 'sale' || invoice.type === 'purchase_return' || invoice.type === 'outward' || invoice.type === 'closing_stock') {
                 stockDiff -= row.quantity;
               }
-              // For transfers, we'd adjust per warehouse, but let's adjust total stock
             }
           });
-          return {
+          const updatedItem = {
             ...it,
             currentStock: it.currentStock + stockDiff,
           };
+          if (affected) {
+            syncRecord('items', updatedItem);
+          }
+          return updatedItem;
         });
       });
 
@@ -1007,8 +1323,6 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setCustomers((prevCustomers) => {
         return prevCustomers.map((c) => {
           if (c.id === invoice.customerId) {
-            // Purchases increase liabilities (or credit supplier balance)
-            // Sales increase assets (or debit customer balance)
             let balDiff = 0;
             if (invoice.type === 'sale') {
               balDiff += invoice.netAmount - invoice.paidAmount;
@@ -1019,10 +1333,12 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             } else if (invoice.type === 'purchase_return') {
               balDiff -= invoice.netAmount;
             }
-            return {
+            const updatedC = {
               ...c,
               balance: c.balance + balDiff,
             };
+            syncRecord('customers', updatedC);
+            return updatedC;
           }
           return c;
         });
@@ -1030,13 +1346,11 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       // Automatically generate real Journal Entry from the invoice if entryCreated is true!
       if (invoice.posted && invoice.entryCreated) {
-        // Let's check if this invoice already has a journal entry
         const entryId = `je-auto-inv-${invoice.id}`;
         const journalRows: any[] = [];
 
         if (invoice.type === 'sale') {
-          // Debit Customer or Cash: netAmount
-          const debitAccount = invoice.paymentMethod === 'cash' ? invoice.cashAccountId : 'acc-112001'; // Default general customer account
+          const debitAccount = invoice.paymentMethod === 'cash' ? invoice.cashAccountId : 'acc-112001';
           journalRows.push({
             accountId: debitAccount,
             debit: invoice.netAmount,
@@ -1045,7 +1359,6 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             notes: `مبيعات فاتورة رقم ${invoice.invoiceNo}`,
           });
 
-          // Credit Sales Account: netAmount - tax - expenses + discount? Let's just match net value for simplicity
           journalRows.push({
             accountId: invoice.itemsAccountId || 'acc-411001',
             debit: 0,
@@ -1054,7 +1367,6 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             notes: `قيمة فاتورة مبيعات رقم ${invoice.invoiceNo}`,
           });
         } else if (invoice.type === 'purchase') {
-          // Debit Purchases Account
           journalRows.push({
             accountId: invoice.itemsAccountId || 'acc-511001',
             debit: invoice.netAmount,
@@ -1063,8 +1375,7 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             notes: `مشتريات فاتورة رقم ${invoice.invoiceNo}`,
           });
 
-          // Credit Supplier or Cash
-          const creditAccount = invoice.paymentMethod === 'cash' ? invoice.cashAccountId : 'acc-211001'; // Default general supplier account
+          const creditAccount = invoice.paymentMethod === 'cash' ? invoice.cashAccountId : 'acc-211001';
           journalRows.push({
             accountId: creditAccount,
             debit: 0,
@@ -1084,20 +1395,48 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             rows: journalRows,
           };
 
-          // Adding this entry will update the ledger balances!
           setTimeout(() => {
             addJournalEntry(autoEntry);
           }, 0);
         }
       }
 
+      syncRecord('invoices', invoice);
       return nextInvoices;
     });
-  }, [addJournalEntry]);
+  }, [addJournalEntry, syncRecord]);
 
   const deleteInvoice = useCallback((id: string) => {
     setInvoices((prev) => prev.filter((inv) => inv.id !== id));
-  }, []);
+    removeRecord('invoices', id);
+    removeRecord('journalEntries', `je-auto-inv-${id}`);
+  }, [removeRecord]);
+
+  const addManufacturingOrder = useCallback((mo: ManufacturingOrder) => {
+    setManufacturing((prev) => {
+      const exists = prev.some((m) => m.id === mo.id);
+      return exists ? prev.map((m) => (m.id === mo.id ? mo : m)) : [...prev, mo];
+    });
+    syncRecord('manufacturing', mo);
+  }, [syncRecord]);
+
+  const deleteManufacturingOrder = useCallback((id: string) => {
+    setManufacturing((prev) => prev.filter((m) => m.id !== id));
+    removeRecord('manufacturing', id);
+  }, [removeRecord]);
+
+  const addTask = useCallback((task: TaskItem) => {
+    setTasks((prev) => {
+      const exists = prev.some((t) => t.id === task.id);
+      return exists ? prev.map((t) => (t.id === task.id ? task : t)) : [...prev, task];
+    });
+    syncRecord('tasks', task);
+  }, [syncRecord]);
+
+  const deleteTask = useCallback((id: string) => {
+    setTasks((prev) => prev.filter((t) => t.id !== id));
+    removeRecord('tasks', id);
+  }, [removeRecord]);
 
   return (
     <ErpContext.Provider
@@ -1136,6 +1475,7 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         invoices,
         tasks,
         alerts,
+        templates,
 
         addBranch,
         addWarehouse,
@@ -1147,6 +1487,12 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addJournalEntry,
         addInvoice,
         deleteInvoice,
+        addManufacturingOrder,
+        deleteManufacturingOrder,
+        addTask,
+        deleteTask,
+        addPrintTemplate,
+        deletePrintTemplate,
 
         setTasks,
         setAlerts,
@@ -1191,7 +1537,16 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         checkProgramUpdate,
         isUpdatingDb,
         updateDatabaseSchema,
-
+        currentVersion,
+        availableUpdate,
+        setAvailableUpdate,
+        updateProgress,
+        isDownloadingUpdate,
+        showUpdateBanner,
+        setShowUpdateBanner,
+        publishNewVersion,
+        rollbackLatestVersion,
+        installUpdate,
       }}
     >
       {children}

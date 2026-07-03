@@ -24,7 +24,9 @@ export const Dashboard: React.FC = () => {
     alerts, 
     setAlerts, 
     openWindow,
-    showToast
+    showToast,
+    addTask,
+    deleteTask
   } = useErp();
 
   // Widget visibility state
@@ -111,16 +113,19 @@ export const Dashboard: React.FC = () => {
       done: false,
       date: new Date().toISOString().split('T')[0],
     };
-    setTasks(prev => [...prev, newTask]);
+    addTask(newTask);
     setNewTaskText('');
   };
 
   const handleToggleTask = (id: string) => {
-    setTasks(prev => prev.map(t => t.id === id ? { ...t, done: !t.done } : t));
+    const task = tasks.find(t => t.id === id);
+    if (task) {
+      addTask({ ...task, done: !task.done });
+    }
   };
 
   const handleDeleteTask = (id: string) => {
-    setTasks(prev => prev.filter(t => t.id !== id));
+    deleteTask(id);
   };
 
   const handleAddReminder = (e: React.FormEvent) => {

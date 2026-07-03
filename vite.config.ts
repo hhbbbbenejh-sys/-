@@ -6,6 +6,10 @@ import {defineConfig} from 'vite';
 export default defineConfig(() => {
   return {
     plugins: [react(), tailwindcss()],
+    build: {
+      target: 'chrome109',
+      cssTarget: 'chrome109',
+    },
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),

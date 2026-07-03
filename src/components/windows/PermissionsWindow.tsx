@@ -76,7 +76,7 @@ export const PermissionsWindow: React.FC<{ windowId: string; initialTab?: string
 
   // Search & Navigation States
   const [searchTerm, setSearchTerm] = useState('');
-  const [selectedUserId, setSelectedUserId] = useState<string>(users[0]?.id || 'admin');
+  const [selectedUserId, setSelectedUserId] = useState<string>(users[0]?.id || 'usr-admin');
   const [activeTab, setActiveTab] = useState<'details' | 'logs' | 'policies'>(() => {
     if (initialTab === 'policies') return 'policies';
     if (initialTab === 'logs') return 'logs';
@@ -184,8 +184,8 @@ export const PermissionsWindow: React.FC<{ windowId: string; initialTab?: string
     // Validation
     if (!fullName.trim()) return setFormError('يرجى إدخال الاسم الكامل للمستخدم');
     if (!username.trim()) return setFormError('يرجى إدخال اسم المستخدم الفريد');
-    if (username.trim().toLowerCase() === 'admin' && mode === 'create') {
-      return setFormError('لا يمكن تكرار اسم المستخدم admin الرئيسي');
+    if (['admin', 'ahmed'].includes(username.trim().toLowerCase()) && mode === 'create') {
+      return setFormError('لا يمكن تكرار اسم المستخدم الرئيسي المحمي (admin / Ahmed)');
     }
     if (!password.trim()) return setFormError('يرجى كتابة كلمة مرور صالحة');
     if (password !== confirmPassword) {
@@ -213,13 +213,13 @@ export const PermissionsWindow: React.FC<{ windowId: string; initialTab?: string
       const updated: ErpUser = {
         ...selectedUser,
         fullName,
-        username: selectedUser.username === 'admin' ? 'admin' : username.trim(), // Keep admin username locked
+        username: ['admin', 'ahmed'].includes(selectedUser.username.toLowerCase()) ? selectedUser.username : username.trim(), // Keep admin username locked
         password,
         jobTitle,
         department,
         email,
         phone,
-        isActive: selectedUser.username === 'admin' ? true : isActive, // admin remains active always
+        isActive: ['admin', 'ahmed'].includes(selectedUser.username.toLowerCase()) ? true : isActive, // admin remains active always
         permissions
       };
       updateUser(updated);
@@ -231,8 +231,8 @@ export const PermissionsWindow: React.FC<{ windowId: string; initialTab?: string
   // Handle Delete
   const handleDelete = () => {
     if (!selectedUser) return;
-    if (selectedUser.username === 'admin') {
-      showToast('لا يمكن حذف المستخدم الرئيسي (admin) الخاص بالنظام لحماية قواعد البيانات.', 'error');
+    if (['admin', 'ahmed'].includes(selectedUser.username.toLowerCase())) {
+      showToast('لا يمكن حذف المستخدم الرئيسي الخاص بالنظام لحماية قواعد البيانات.', 'error');
       return;
     }
     if (currentUser && currentUser.id === selectedUser.id) {
@@ -254,8 +254,8 @@ export const PermissionsWindow: React.FC<{ windowId: string; initialTab?: string
   // Handle Checkbox Toggle
   const handleTogglePermission = (key: keyof ErpPermissions) => {
     if (mode === 'view') return;
-    if (selectedUser?.username === 'admin' && mode === 'edit') {
-      showToast('صلاحيات مدير النظام (admin) ثابتة وتعتبر صلاحيات كاملة دوماً.', 'info');
+    if (selectedUser && ['admin', 'ahmed'].includes(selectedUser.username.toLowerCase()) && mode === 'edit') {
+      showToast('صلاحيات مدير النظام ثابتة وتعتبر صلاحيات كاملة دوماً.', 'info');
       return;
     }
     setPermissions(prev => ({
@@ -267,7 +267,7 @@ export const PermissionsWindow: React.FC<{ windowId: string; initialTab?: string
   // Set All Permissions Active/Inactive
   const toggleAllPermissions = (enable: boolean) => {
     if (mode === 'view') return;
-    if (selectedUser?.username === 'admin' && mode === 'edit') return;
+    if (selectedUser && ['admin', 'ahmed'].includes(selectedUser.username.toLowerCase()) && mode === 'edit') return;
     
     const updated = { ...permissions };
     Object.keys(updated).forEach(k => {
@@ -329,7 +329,7 @@ export const PermissionsWindow: React.FC<{ windowId: string; initialTab?: string
                     <div className="font-extrabold text-xs flex items-center gap-1.5">
                       <User className={`w-3.5 h-3.5 ${isSelected ? 'text-white' : 'text-blue-600'}`} />
                       <span>{u.fullName}</span>
-                      {u.username === 'admin' && (
+                      {['admin', 'ahmed'].includes(u.username.toLowerCase()) && (
                         <span className="text-[9px] bg-red-500 text-white px-1.5 py-0.2 rounded font-bold">مدير</span>
                       )}
                     </div>
@@ -382,7 +382,7 @@ export const PermissionsWindow: React.FC<{ windowId: string; initialTab?: string
           <div className="space-y-1">
             <h3 className="font-extrabold text-sm text-slate-800 flex items-center gap-1.5">
               <span>{mode === 'create' ? 'إنشاء حساب مستخدم جديد' : `بيانات وصلاحيات: ${fullName}`}</span>
-              {selectedUser?.username === 'admin' && mode === 'edit' && (
+              {selectedUser && ['admin', 'ahmed'].includes(selectedUser.username.toLowerCase()) && mode === 'edit' && (
                 <span className="text-xs text-amber-700 bg-amber-100 px-2.5 py-0.5 rounded border border-amber-200">المدير العام لديه كامل الصلاحيات تلقائياً</span>
               )}
             </h3>
@@ -570,7 +570,7 @@ export const PermissionsWindow: React.FC<{ windowId: string; initialTab?: string
                     <label className="font-bold text-slate-600 block">اسم المستخدم للدخول <span className="text-red-500">*</span></label>
                     <input 
                       type="text" 
-                      disabled={mode === 'view' || (mode === 'edit' && selectedUser?.username === 'admin')}
+                      disabled={mode === 'view' || (mode === 'edit' && selectedUser && ['admin', 'ahmed'].includes(selectedUser.username.toLowerCase()))}
                       value={username}
                       onChange={(e) => setUsername(e.target.value)}
                       placeholder="مثال: a_shammari"
@@ -677,7 +677,7 @@ export const PermissionsWindow: React.FC<{ windowId: string; initialTab?: string
                   <label className="inline-flex items-center gap-2 cursor-pointer select-none">
                     <input 
                       type="checkbox" 
-                      disabled={mode === 'view' || selectedUser?.username === 'admin'}
+                      disabled={mode === 'view' || (selectedUser && ['admin', 'ahmed'].includes(selectedUser.username.toLowerCase()))}
                       checked={isActive}
                       onChange={(e) => setIsActive(e.target.checked)}
                       className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 w-4 h-4 cursor-pointer disabled:opacity-50"
@@ -724,7 +724,7 @@ export const PermissionsWindow: React.FC<{ windowId: string; initialTab?: string
                       <div className="space-y-1.5">
                         {grp.permissions.map(perm => {
                           // Determine if permission checked
-                          const isChecked = selectedUser?.username === 'admin' ? true : !!permissions[perm.key as keyof ErpPermissions];
+                          const isChecked = selectedUser && ['admin', 'ahmed'].includes(selectedUser.username.toLowerCase()) ? true : !!permissions[perm.key as keyof ErpPermissions];
                           return (
                             <label 
                               key={perm.key}
@@ -766,7 +766,7 @@ export const PermissionsWindow: React.FC<{ windowId: string; initialTab?: string
           {mode === 'view' ? (
             <button
               onClick={handleDelete}
-              disabled={!selectedUser || selectedUser.username === 'admin'}
+              disabled={!selectedUser || ['admin', 'ahmed'].includes(selectedUser.username.toLowerCase())}
               className="px-4 py-2 bg-red-50 hover:bg-red-100 disabled:opacity-40 text-red-700 rounded border border-red-200 text-xs font-bold flex items-center gap-1 cursor-pointer transition-colors"
             >
               <Trash2 className="w-4 h-4" />

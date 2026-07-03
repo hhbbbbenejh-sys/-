@@ -56,10 +56,10 @@ export const DatabaseModal: React.FC<DatabaseModalProps> = ({ isMdiMode = false,
     }
   };
 
-  const handleCreateDb = (e: React.FormEvent) => {
+  const handleCreateDb = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newDbName.trim()) return;
-    const newId = createDatabase(newDbName, newDbDesc || 'قاعدة بيانات جديدة منشأة مخصصة');
+    const newId = await createDatabase(newDbName, newDbDesc || 'قاعدة بيانات جديدة منشأة مخصصة');
     setSelectedDbId(newId);
     setShowCreateForm(false);
     setNewDbName('');
