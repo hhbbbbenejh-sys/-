@@ -74,12 +74,19 @@ interface ErpContextType {
   manufacturing: ManufacturingOrder[];
   templates: PrintTemplate[];
 
+  setBranches: React.Dispatch<React.SetStateAction<Branch[]>>;
+  setWarehouses: React.Dispatch<React.SetStateAction<Warehouse[]>>;
+  setAccounts: React.Dispatch<React.SetStateAction<Account[]>>;
+  setInvoices: React.Dispatch<React.SetStateAction<Invoice[]>>;
+
   // Mutators
   addBranch: (branch: Branch) => void;
   addWarehouse: (warehouse: Warehouse) => void;
   addCostCenter: (cc: CostCenter) => void;
   addAccount: (account: Account) => void;
   addCustomer: (customer: Customer) => void;
+  deleteCustomer: (id: string) => void;
+  setCustomers: React.Dispatch<React.SetStateAction<Customer[]>>;
   addItem: (item: Item) => void;
   addItemGroup: (group: ItemGroup) => void;
   addJournalEntry: (entry: JournalEntry) => void;
@@ -1222,6 +1229,11 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     syncRecord('customers', cust);
   }, [syncRecord]);
 
+  const deleteCustomer = useCallback((id: string) => {
+    setCustomers((prev) => prev.filter((c) => c.id !== id));
+    removeRecord('customers', id);
+  }, [removeRecord]);
+
   const addItem = useCallback((item: Item) => {
     setItems((prev) => {
       const exists = prev.some((i) => i.id === item.id);
@@ -1468,11 +1480,15 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         costCenters,
         currencies,
         accounts,
+        setAccounts,
         customers,
         itemGroups,
         items,
         journalEntries,
         invoices,
+        setInvoices,
+        setBranches,
+        setWarehouses,
         tasks,
         alerts,
         templates,
@@ -1482,6 +1498,8 @@ export const ErpProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addCostCenter,
         addAccount,
         addCustomer,
+        deleteCustomer,
+        setCustomers,
         addItem,
         addItemGroup,
         addJournalEntry,

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useErp } from '../../context/ErpContext';
+import { supabase } from '../../utils/supabase';
 import { ExcelGrid } from '../ExcelGrid';
 import { 
   FileText, Plus, Trash2, Check, X, Printer, Image as ImageIcon, Settings,
@@ -77,6 +78,7 @@ export const InvoiceWindow: React.FC<InvoiceWindowProps> = ({
     customers, 
     items, 
     invoices, 
+    setInvoices,
     addInvoice, 
     deleteInvoice,
     showToast,
@@ -232,6 +234,118 @@ export const InvoiceWindow: React.FC<InvoiceWindowProps> = ({
     setActiveTabId(initialTab.id);
   }, [invoiceId, invoiceType]);
 
+  // Load all invoices from Supabase on mount
+  useEffect(() => {
+    async function fetchAllInvoicesFromDb() {
+      if (!connectedDbId) return;
+      try {
+        // Fetch Sales Invoices & their items
+        const { data: salesData, error: salesError } = await supabase
+          .from('sales_invoices')
+          .select(`
+            *,
+            sales_invoice_items (*)
+          `)
+          .eq('company_id', connectedDbId);
+
+        // Fetch Purchase Invoices & their items
+        const { data: purchaseData, error: purchaseError } = await supabase
+          .from('purchase_invoices')
+          .select(`
+            *,
+            purchase_invoice_items (*)
+          `)
+          .eq('company_id', connectedDbId);
+
+        if (salesError || purchaseError) {
+          throw new Error(salesError?.message || purchaseError?.message);
+        }
+
+        const mappedSales: Invoice[] = (salesData || []).map(row => ({
+          id: row.id,
+          invoiceNo: row.invoice_no,
+          type: 'sale',
+          date: row.date,
+          description: row.description || '',
+          branchId: row.branch_id,
+          customerId: row.customer_id,
+          currencyId: currencies[0]?.id || 'cur-1',
+          exchangeRate: 1.0,
+          paymentMethod: row.payment_method as any,
+          warehouseId: row.warehouse_id,
+          cashAccountId: 'acc-111001',
+          itemsAccountId: 'acc-411001',
+          debitCostCenterId: 'cc-1',
+          creditCostCenterId: 'cc-2',
+          posted: row.posted,
+          entryCreated: true,
+          items: (row.sales_invoice_items || []).map((item: any) => ({
+            id: item.id,
+            itemId: item.product_id,
+            quantity: Number(item.quantity) || 0,
+            unitPrice: Number(item.unit_price) || 0,
+            unit: 'حبة',
+            notes: item.notes || '',
+            total: Number(item.total) || 0
+          })),
+          discount: Number(row.discount) || 0,
+          addition: 0,
+          taxPercent: 15,
+          expenses: 0,
+          netAmount: Number(row.net_amount) || 0,
+          paidAmount: Number(row.paid_amount) || 0,
+          salesRepId: 'rep-1',
+          notes: '',
+          auditLogs: [`تم الجلب من قاعدة البيانات سحابياً`]
+        }));
+
+        const mappedPurchases: Invoice[] = (purchaseData || []).map(row => ({
+          id: row.id,
+          invoiceNo: row.invoice_no,
+          type: 'purchase',
+          date: row.date,
+          description: row.description || '',
+          branchId: row.branch_id,
+          customerId: row.supplier_id, // Map supplier_id to customerId parameter
+          currencyId: currencies[0]?.id || 'cur-1',
+          exchangeRate: 1.0,
+          paymentMethod: row.payment_method as any,
+          warehouseId: row.warehouse_id,
+          cashAccountId: 'acc-111002',
+          itemsAccountId: 'acc-511001',
+          debitCostCenterId: 'cc-1',
+          creditCostCenterId: 'cc-2',
+          posted: row.posted,
+          entryCreated: true,
+          items: (row.purchase_invoice_items || []).map((item: any) => ({
+            id: item.id,
+            itemId: item.product_id,
+            quantity: Number(item.quantity) || 0,
+            unitPrice: Number(item.unit_price) || 0,
+            unit: 'حبة',
+            notes: item.notes || '',
+            total: Number(item.total) || 0
+          })),
+          discount: Number(row.discount) || 0,
+          addition: 0,
+          taxPercent: 15,
+          expenses: 0,
+          netAmount: Number(row.net_amount) || 0,
+          paidAmount: Number(row.paid_amount) || 0,
+          salesRepId: 'rep-1',
+          notes: '',
+          auditLogs: [`تم الجلب من قاعدة البيانات سحابياً`]
+        }));
+
+        setInvoices([...mappedSales, ...mappedPurchases]);
+      } catch (err) {
+        console.error('Error fetching invoices from Supabase:', err);
+      }
+    }
+
+    fetchAllInvoicesFromDb();
+  }, [connectedDbId, currencies, setInvoices]);
+
   // Active Tab structure helper
   const activeTab = tabs.find(t => t.id === activeTabId) || tabs[0];
 
@@ -362,14 +476,21 @@ export const InvoiceWindow: React.FC<InvoiceWindowProps> = ({
     showToast(`تم فتح تبويب ${getArabicTypeLabel(type)} جديد`, 'success');
   };
 
-  // Save invoice to global context
-  const handleSaveActiveInvoice = () => {
+  // Save invoice to global context and Supabase
+  const handleSaveActiveInvoice = async () => {
+    if (!activeTab.gridRows || activeTab.gridRows.length === 0) {
+      showToast('يجب أن تحتوي الفاتورة على صنف واحد على الأقل قبل الحفظ.', 'warning');
+      return;
+    }
+
     const sub = activeTab.gridRows.reduce((acc, r) => acc + Number(r.total || 0), 0);
     const tax = (sub - activeTab.discount + activeTab.addition) * (activeTab.taxPercent / 100);
     const net = sub - activeTab.discount + activeTab.addition + tax + activeTab.expenses;
 
+    const savedInvoiceId = activeTab.isNew ? `inv-${Date.now()}` : activeTab.id;
+
     const savedInvoice: Invoice = {
-      id: activeTab.isNew ? `inv-${Date.now()}` : activeTab.id,
+      id: savedInvoiceId,
       invoiceNo: activeTab.invoiceNo,
       type: activeTab.invoiceType,
       date: activeTab.date,
@@ -401,8 +522,116 @@ export const InvoiceWindow: React.FC<InvoiceWindowProps> = ({
       auditLogs: [...activeTab.auditLogs, `تم إجراء مزامنة وتخزين نهائي للمستند في ${new Date().toLocaleString('ar-SA')}`]
     };
 
+    if (connectedDbId) {
+      try {
+        if (activeTab.invoiceType === 'sale' || activeTab.invoiceType === 'sale_return') {
+          // 1. Upsert into sales_invoices
+          const { error: invoiceError } = await supabase
+            .from('sales_invoices')
+            .upsert({
+              id: savedInvoiceId,
+              company_id: connectedDbId,
+              branch_id: activeTab.branchId,
+              customer_id: activeTab.customerId || null,
+              warehouse_id: activeTab.warehouse_id || null,
+              invoice_no: activeTab.invoiceNo,
+              date: activeTab.date,
+              payment_method: activeTab.paymentMethod,
+              total_amount: sub,
+              discount: activeTab.discount,
+              tax_amount: tax,
+              net_amount: net,
+              paid_amount: activeTab.paidAmount,
+              posted: activeTab.posted,
+              description: activeTab.description || null
+            });
+
+          if (invoiceError) throw invoiceError;
+
+          // 2. Delete old items
+          await supabase
+            .from('sales_invoice_items')
+            .delete()
+            .eq('invoice_id', savedInvoiceId);
+
+          // 3. Insert new items
+          const itemRecords = activeTab.gridRows.map((r, index) => ({
+            id: `item-${savedInvoiceId}-${index}-${Date.now()}`,
+            company_id: connectedDbId,
+            invoice_id: savedInvoiceId,
+            product_id: r.itemId,
+            quantity: Number(r.quantity) || 1,
+            unit_price: Number(r.unitPrice) || 0,
+            total: Number(r.total) || 0,
+            discount: 0,
+            notes: r.notes || null
+          }));
+
+          const { error: itemsError } = await supabase
+            .from('sales_invoice_items')
+            .insert(itemRecords);
+
+          if (itemsError) throw itemsError;
+
+        } else if (activeTab.invoiceType === 'purchase' || activeTab.invoiceType === 'purchase_return') {
+          // 1. Upsert into purchase_invoices
+          const { error: invoiceError } = await supabase
+            .from('purchase_invoices')
+            .upsert({
+              id: savedInvoiceId,
+              company_id: connectedDbId,
+              branch_id: activeTab.branchId,
+              supplier_id: activeTab.customerId || null, // Map customerId parameter to supplier_id column for purchase invoices
+              warehouse_id: activeTab.warehouse_id || null,
+              invoice_no: activeTab.invoiceNo,
+              date: activeTab.date,
+              payment_method: activeTab.paymentMethod,
+              total_amount: sub,
+              discount: activeTab.discount,
+              tax_amount: tax,
+              net_amount: net,
+              paid_amount: activeTab.paidAmount,
+              posted: activeTab.posted,
+              description: activeTab.description || null
+            });
+
+          if (invoiceError) throw invoiceError;
+
+          // 2. Delete old items
+          await supabase
+            .from('purchase_invoice_items')
+            .delete()
+            .eq('invoice_id', savedInvoiceId);
+
+          // 3. Insert new items
+          const itemRecords = activeTab.gridRows.map((r, index) => ({
+            id: `item-${savedInvoiceId}-${index}-${Date.now()}`,
+            company_id: connectedDbId,
+            invoice_id: savedInvoiceId,
+            product_id: r.itemId,
+            quantity: Number(r.quantity) || 1,
+            unit_price: Number(r.unitPrice) || 0,
+            total: Number(r.total) || 0,
+            discount: 0,
+            notes: r.notes || null
+          }));
+
+          const { error: itemsError } = await supabase
+            .from('purchase_invoice_items')
+            .insert(itemRecords);
+
+          if (itemsError) throw itemsError;
+        }
+      } catch (err: any) {
+        console.error('Error saving invoice to relational DB:', err);
+        showToast(`فشل حفظ الفاتورة في قاعدة البيانات: ${err.message}`, 'error');
+        return;
+      }
+    }
+
+    // Call context to update local balances and logs
     addInvoice(savedInvoice);
-    
+
     // Update active tab isNew and ID
     setTabs(prev => prev.map(t => t.id === activeTabId ? {
       ...t,
@@ -413,7 +642,7 @@ export const InvoiceWindow: React.FC<InvoiceWindowProps> = ({
     } : t));
     setActiveTabId(savedInvoice.id);
 
-    showToast(`تم حفظ الفاتورة رقم ${savedInvoice.invoiceNo} بنجاح ومزامنتها مع الخوادم.`, 'success');
+    showToast(`تم حفظ الفاتورة رقم ${savedInvoice.invoiceNo} ومزامنة تفاصيل الحسابات بنجاح.`, 'success');
   };
 
   // Fullscreen support

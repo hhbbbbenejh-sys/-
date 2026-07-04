@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useErp } from '../../context/ErpContext';
+import { supabase } from '../../utils/supabase';
 import { 
   FileText, Plus, Edit3, Trash2, Check, X, CreditCard, 
-  UserSquare2, Layers, Percent, MapPin, Briefcase, DollarSign 
+  UserSquare2, Layers, Percent, MapPin, Briefcase, DollarSign, Scale, Loader2
 } from 'lucide-react';
 
 interface DefinitionsWindowProps {
@@ -12,14 +13,83 @@ interface DefinitionsWindowProps {
 }
 
 export const DefinitionsWindow: React.FC<DefinitionsWindowProps> = ({ windowId, onClose, initialTab }) => {
-  const { showToast } = useErp();
+  const { showToast, connectedDbId } = useErp();
 
-  const [activeTab, setActiveTab] = useState<'journal_types' | 'invoice_types' | 'payment_methods' | 'sales_reps'>(() => {
+  const [activeTab, setActiveTab] = useState<'journal_types' | 'invoice_types' | 'payment_methods' | 'sales_reps' | 'units'>(() => {
     if (initialTab === 'invoice_types') return 'invoice_types';
     if (initialTab === 'payment_methods') return 'payment_methods';
     if (initialTab === 'sales_reps') return 'sales_reps';
+    if (initialTab === 'units') return 'units';
     return 'journal_types';
   });
+
+  // 5. Measuring Units State (Directly synced to Supabase)
+  const [dbUnits, setDbUnits] = useState<{ id: string; name: string }[]>([]);
+  const [newUnitName, setNewUnitName] = useState('');
+  const [loadingUnits, setLoadingUnits] = useState(false);
+
+  const fetchUnits = async () => {
+    if (!connectedDbId) return;
+    setLoadingUnits(true);
+    try {
+      const { data, error } = await supabase
+        .from('units')
+        .select('*')
+        .eq('company_id', connectedDbId);
+      if (!error && data) {
+        setDbUnits(data);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoadingUnits(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'units') {
+      fetchUnits();
+    }
+  }, [activeTab, connectedDbId]);
+
+  const handleAddUnit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newUnitName.trim()) {
+      showToast('يرجى كتابة اسم الوحدة.', 'warning');
+      return;
+    }
+    if (!connectedDbId) {
+      showToast('يجب الاتصال بقاعدة البيانات لحفظ وحدة القياس.', 'error');
+      return;
+    }
+    try {
+      const newId = `un-${Date.now()}`;
+      const { error } = await supabase
+        .from('units')
+        .insert([{ id: newId, company_id: connectedDbId, name: newUnitName.trim() }]);
+      if (error) throw error;
+      setNewUnitName('');
+      fetchUnits();
+      showToast('تم تسجيل وحفظ وحدة القياس بنجاح.', 'success');
+    } catch (err: any) {
+      showToast(`فشل الحفظ: ${err.message}`, 'error');
+    }
+  };
+
+  const handleDeleteUnit = async (id: string) => {
+    if (!confirm('هل أنت متأكد من رغبتك في حذف وحدة القياس هذه؟')) return;
+    try {
+      const { error } = await supabase
+        .from('units')
+        .delete()
+        .eq('id', id);
+      if (error) throw error;
+      fetchUnits();
+      showToast('تم حذف وحدة القياس بنجاح ومزامنتها.', 'success');
+    } catch (err: any) {
+      showToast(`فشل الحذف: ${err.message}`, 'error');
+    }
+  };
 
   // 1. Journal Entry Types State
   const [journalTypes, setJournalTypes] = useState([
@@ -170,6 +240,18 @@ export const DefinitionsWindow: React.FC<DefinitionsWindowProps> = ({ windowId, 
           >
             <UserSquare2 className="w-3.5 h-3.5" />
             <span>مندوبي المبيعات</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('units')}
+            className={`w-full text-right px-3 py-2 rounded text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+              activeTab === 'units' 
+                ? 'bg-blue-600 text-white shadow-md' 
+                : 'hover:bg-slate-200 text-slate-600'
+            }`}
+          >
+            <Scale className="w-3.5 h-3.5" />
+            <span>وحدات القياس</span>
           </button>
         </div>
 
@@ -472,6 +554,86 @@ export const DefinitionsWindow: React.FC<DefinitionsWindowProps> = ({ windowId, 
                     className="w-full py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded text-xs transition-all cursor-pointer shadow-xs"
                   >
                     حفظ وإقرار البيانات
+                  </button>
+                </form>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'units' && (
+          <div className="space-y-4">
+            <div className="border-b pb-2">
+              <h3 className="font-extrabold text-sm text-slate-800">وحدات القياس والتحزيم</h3>
+              <p className="text-[11px] text-slate-500">تعريف وحدات قياس المخزون المستخدمة لحساب كميات الأصناف والمواد بالمستودع.</p>
+            </div>
+
+            <div className="grid grid-cols-3 gap-4">
+              {/* List units */}
+              <div className="col-span-2 space-y-2">
+                <span className="font-bold text-xs text-slate-500">الوحدات المعرفة حالياً</span>
+                <div className="bg-white border rounded-lg overflow-hidden shadow-xs">
+                  {loadingUnits ? (
+                    <div className="flex flex-col items-center justify-center p-8 gap-1">
+                      <Loader2 className="w-5 h-5 animate-spin text-blue-600" />
+                      <span className="text-[10px] text-slate-400">جاري تحميل الوحدات...</span>
+                    </div>
+                  ) : dbUnits.length === 0 ? (
+                    <div className="p-8 text-center text-slate-400 text-xs font-bold">
+                      لا يوجد وحدات قياس مخصصة مسجلة بعد.
+                    </div>
+                  ) : (
+                    <table className="w-full text-right text-xs">
+                      <thead>
+                        <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold">
+                          <th className="px-3 py-2 w-24">رقم تسلسلي</th>
+                          <th className="px-3 py-2">اسم وحدة القياس</th>
+                          <th className="px-3 py-2 w-16 text-center">حذف</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {dbUnits.map((u, index) => (
+                          <tr key={u.id} className="hover:bg-slate-50">
+                            <td className="px-3 py-2 font-mono text-slate-400">{index + 1}</td>
+                            <td className="px-3 py-2 font-bold text-slate-700">{u.name}</td>
+                            <td className="px-3 py-2 text-center">
+                              <button 
+                                onClick={() => handleDeleteUnit(u.id)}
+                                className="p-1 hover:bg-red-50 text-slate-400 hover:text-red-600 rounded transition-colors"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </div>
+
+              {/* Add Unit form */}
+              <div className="bg-white border rounded-lg p-4 space-y-3 shadow-xs h-fit">
+                <span className="font-bold text-xs text-slate-800 block">إضافة وحدة قياس جديدة</span>
+                <form onSubmit={handleAddUnit} className="space-y-3">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-slate-500">اسم الوحدة (مثال: حبة، كرتونة، كغ): *</label>
+                    <input 
+                      type="text" 
+                      required
+                      value={newUnitName}
+                      onChange={e => setNewUnitName(e.target.value)}
+                      placeholder="e.g. كرتونة شد 12"
+                      className="w-full text-xs p-2 bg-slate-50 border border-slate-300 rounded font-bold focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+
+                  <button 
+                    type="submit"
+                    className="w-full py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded text-xs transition-all cursor-pointer shadow-xs flex items-center justify-center gap-1"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>حفظ وحدة القياس</span>
                   </button>
                 </form>
               </div>

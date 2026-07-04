@@ -97,9 +97,11 @@ export const MenuBar: React.FC = () => {
       items: [
         { label: 'شجرة الحسابات (دليل الحسابات)', permissionKey: 'accounting', action: () => openWindow('chart_of_accounts', 'دليل الحسابات المالي') },
         { label: 'بطاقة حساب جديدة', permissionKey: 'accounting', action: () => openWindow('account_card', 'بطاقة الحساب') },
+        { label: 'إدارة الخزائن والحسابات البنكية', permissionKey: 'accounting', action: () => openWindow('treasury_banks', 'إدارة الخزائن والحسابات البنكية') },
         { label: 'الحسابات التوزيعية والتجميعية', permissionKey: 'accounting', action: () => showToast('تم تخصيص الحسابات التجميعية لمراكز التكلفة المحددة بنجاح.', 'success') },
         { label: 'ميزان توازن الحسابات', permissionKey: 'accounting', action: () => openWindow('reports', 'ميزان المراجعة العام', { reportType: 'trial_balance' }) },
-        { label: 'تعريف وتحليل حسابات العملاء', permissionKey: 'accounting', action: () => showToast('تحليل مالي مفصل للذمم المدينة ومستويات الائتمان المقبولة.', 'info') },
+        { label: 'تعريف وتحليل حسابات العملاء', permissionKey: 'accounting', action: () => openWindow('customers', 'شاشة إدارة بطاقات العملاء المباشرة') },
+        { label: 'تعريف وتحليل حسابات الموردين', permissionKey: 'accounting', action: () => openWindow('suppliers', 'شاشة إدارة بطاقات الموردين المباشرة') },
         { label: 'الحسابات الختامية والميزانية', permissionKey: 'accounting', action: () => openWindow('reports', 'الحسابات الختامية', { reportType: 'financial_statements' }) },
       ]
     },
@@ -143,6 +145,14 @@ export const MenuBar: React.FC = () => {
         { divider: true },
         { label: 'مناقلة مستودعية بقيد مالي', permissionKey: 'inventory', action: () => openWindow('invoice', 'مناقلة مستودعية بقيد مالي', { invoiceType: 'transfer_entry' }) },
         { label: 'مناقلة مستودعية بلا قيد مالي', permissionKey: 'inventory', action: () => openWindow('invoice', 'مناقلة مستودعية بلا قيد مالي', { invoiceType: 'transfer_no_entry' }) },
+      ]
+    },
+    {
+      id: 'hr',
+      label: 'الموارد البشرية',
+      items: [
+        { label: 'إدارة شؤون الموظفين والبطاقات', action: () => openWindow('hr_employees', 'الموارد البشرية وشؤون الموظفين') },
+        { label: 'تسجيل الإجراءات والقرارات الإدارية', action: () => openWindow('hr_employees', 'الموارد البشرية وشؤون الموظفين') },
       ]
     },
     {

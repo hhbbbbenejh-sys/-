@@ -27,14 +27,28 @@ import { PriceUpdateWindow } from './components/windows/PriceUpdateWindow';
 import { ToolsManagerWindow } from './components/windows/ToolsManagerWindow';
 import { CalculatorWindow } from './components/windows/CalculatorWindow';
 import { AdminUpdatesWindow } from './components/windows/AdminUpdatesWindow';
+import { CustomersWindow } from './components/windows/CustomersWindow';
+import { SuppliersWindow } from './components/windows/SuppliersWindow';
+import { TreasuryBanksWindow } from './components/windows/TreasuryBanksWindow';
+import { HrEmployeesWindow } from './components/windows/HrEmployeesWindow';
+import { AiAssistant } from './components/AiAssistant';
 
 import { 
-  X, Minimize2, Maximize2, Move, AlertCircle, CheckCircle, AlertTriangle, XCircle, Info, RefreshCw
+  X, Minimize2, Maximize2, Move, AlertCircle, CheckCircle, AlertTriangle, XCircle, Info, RefreshCw, Sparkles
 } from 'lucide-react';
+import { motion } from 'motion/react';
 import { MdiWindow } from './types/erp';
 
 function DesktopContent() {
   const [showChangesModal, setShowChangesModal] = React.useState(false);
+  const [showAiAssistant, setShowAiAssistant] = React.useState(false);
+
+  React.useEffect(() => {
+    const handleToggle = () => setShowAiAssistant(prev => !prev);
+    window.addEventListener('toggle-ai-assistant', handleToggle);
+    return () => window.removeEventListener('toggle-ai-assistant', handleToggle);
+  }, []);
+
   const { 
     connectedDbId, 
     currentUser,
@@ -169,6 +183,14 @@ function DesktopContent() {
         return <CostCentersWindow windowId={win.id} onClose={() => closeWindow(win.id)} />;
       case 'currencies':
         return <CurrenciesWindow windowId={win.id} onClose={() => closeWindow(win.id)} />;
+      case 'customers':
+        return <CustomersWindow windowId={win.id} onClose={() => closeWindow(win.id)} />;
+      case 'suppliers':
+        return <SuppliersWindow windowId={win.id} onClose={() => closeWindow(win.id)} />;
+      case 'treasury_banks':
+        return <TreasuryBanksWindow windowId={win.id} onClose={() => closeWindow(win.id)} />;
+      case 'hr_employees':
+        return <HrEmployeesWindow windowId={win.id} onClose={() => closeWindow(win.id)} />;
       case 'price_update':
         return <PriceUpdateWindow windowId={win.id} onClose={() => closeWindow(win.id)} />;
       case 'tools_manager':
@@ -561,6 +583,28 @@ function DesktopContent() {
             <span className="text-slate-800 text-[12px] font-extrabold leading-relaxed">{toast.message}</span>
           </div>
         </div>
+      )}
+
+      {/* Floating AI ERP Assistant Drawer */}
+      <AiAssistant isOpen={showAiAssistant} onClose={() => setShowAiAssistant(false)} />
+
+      {/* Floating FAB Trigger Button */}
+      {connectedDbId && currentUser && !showAiAssistant && (
+        <motion.button
+          initial={{ scale: 0, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          exit={{ scale: 0, opacity: 0 }}
+          whileHover={{ scale: 1.05 }}
+          whileTap={{ scale: 0.95 }}
+          onClick={() => setShowAiAssistant(true)}
+          className="fixed bottom-12 left-6 z-[190] bg-gradient-to-tr from-purple-700 via-indigo-600 to-indigo-700 text-white p-3.5 rounded-full shadow-[0_4px_20px_rgba(109,40,217,0.4)] border border-purple-500 hover:brightness-110 cursor-pointer flex items-center justify-center group"
+          title="افتح المساعد الذكي"
+        >
+          <Sparkles className="w-5.5 h-5.5 text-yellow-300 fill-yellow-300 group-hover:animate-spin" />
+          <span className="max-w-0 overflow-hidden group-hover:max-w-xs group-hover:mr-2 transition-all duration-300 whitespace-nowrap text-xs font-black select-none font-sans" style={{ direction: 'rtl' }}>
+            المساعد الذكي
+          </span>
+        </motion.button>
       )}
 
       {/* Bottom Status Bar */}

@@ -203,7 +203,10 @@ export const Dashboard: React.FC = () => {
         </div>
 
         {/* Customers */}
-        <div className="bg-white rounded-xl border border-slate-200 p-3.5 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between relative overflow-hidden group">
+        <div 
+          onClick={() => openWindow('customers', 'شاشة إدارة بطاقات العملاء المباشرة')}
+          className="bg-white rounded-xl border border-slate-200 p-3.5 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between relative overflow-hidden group cursor-pointer"
+        >
           <div className="absolute top-0 right-0 h-1.5 w-full bg-purple-500"></div>
           <span className="text-[11px] font-bold text-slate-500 flex items-center gap-1.5">
             <Users className="w-3.5 h-3.5 text-purple-500" />
@@ -218,7 +221,10 @@ export const Dashboard: React.FC = () => {
         </div>
 
         {/* Suppliers */}
-        <div className="bg-white rounded-xl border border-slate-200 p-3.5 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between relative overflow-hidden group">
+        <div 
+          onClick={() => openWindow('suppliers', 'شاشة إدارة بطاقات الموردين المباشرة')}
+          className="bg-white rounded-xl border border-slate-200 p-3.5 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between relative overflow-hidden group cursor-pointer"
+        >
           <div className="absolute top-0 right-0 h-1.5 w-full bg-rose-500"></div>
           <span className="text-[11px] font-bold text-slate-500 flex items-center gap-1.5">
             <Users className="w-3.5 h-3.5 text-rose-500" />
@@ -233,7 +239,10 @@ export const Dashboard: React.FC = () => {
         </div>
 
         {/* Cash vault (الخزينة) */}
-        <div className="bg-white rounded-xl border border-slate-200 p-3.5 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between relative overflow-hidden group">
+        <div 
+          onClick={() => openWindow('treasury_banks', 'إدارة الخزائن والحسابات البنكية')}
+          className="bg-white rounded-xl border border-slate-200 p-3.5 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between relative overflow-hidden group cursor-pointer"
+        >
           <div className="absolute top-0 right-0 h-1.5 w-full bg-blue-600"></div>
           <span className="text-[11px] font-bold text-slate-500 flex items-center gap-1.5">
             <Landmark className="w-3.5 h-3.5 text-blue-600" />

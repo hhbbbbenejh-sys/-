@@ -3,7 +3,7 @@ import { useErp } from '../context/ErpContext';
 import { 
   User, BookOpen, FileSpreadsheet, Package, Layers, TrendingUp, 
   UserCheck, Shield, FileText, LayoutGrid, Calendar, HelpCircle, 
-  DollarSign, BarChart3, PlusCircle, ShoppingCart, Percent, Settings2, Lock
+  DollarSign, BarChart3, PlusCircle, ShoppingCart, Percent, Settings2, Lock, Sparkles
 } from 'lucide-react';
 
 export const Ribbon: React.FC = () => {
@@ -380,6 +380,19 @@ export const Ribbon: React.FC = () => {
             </button>
           </div>
         )}
+
+        {/* PERSISTENT AI ASSISTANT QUICK LAUNCHER */}
+        <div className="flex items-center gap-1.5 border-r pr-3 border-slate-300 mr-auto">
+          <button
+            onClick={() => window.dispatchEvent(new CustomEvent('toggle-ai-assistant'))}
+            className="flex flex-col items-center justify-center p-1.5 rounded border border-purple-200 bg-purple-50 hover:bg-purple-100 hover:border-purple-300 transition-all min-w-[70px] group cursor-pointer shadow-xs animate-pulse"
+          >
+            <div className="bg-gradient-to-tr from-purple-700 to-indigo-600 text-white p-2 rounded-lg group-hover:scale-105 transition-transform shadow-md relative">
+              <Sparkles className="w-4 h-4 text-yellow-300 fill-yellow-300" />
+            </div>
+            <span className="text-[11px] font-extrabold text-purple-800 mt-1">المساعد الذكي</span>
+          </button>
+        </div>
       </div>
     </div>
   );

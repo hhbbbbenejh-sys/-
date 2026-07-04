@@ -3,6 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import { createClient } from '@supabase/supabase-js';
+import { GoogleGenAI } from '@google/genai';
 
 const app = express();
 const PORT = 3000;
@@ -45,8 +46,11 @@ function saveServerDb(data: any) {
 
 // Supabase client lazy initialization
 let supabaseClient: any = null;
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_ANON_KEY;
+const rawSupabaseUrl = process.env.SUPABASE_URL;
+const rawSupabaseKey = process.env.SUPABASE_ANON_KEY;
+
+const supabaseUrl = rawSupabaseUrl?.replace(/^SUPABASE_URL\s+/, '').trim();
+const supabaseKey = rawSupabaseKey?.replace(/^SUPABASE_ANON_KEY\s+/, '').trim();
 
 const isValidSupabaseUrl = (url: string | undefined): boolean => {
   if (!url) return false;
@@ -535,6 +539,177 @@ app.post('/api/updates/rollback', (req, res) => {
     res.json({ success: true, message: 'تم التراجع عن آخر تحديث بنجاح.', rolled });
   } else {
     res.status(400).json({ success: false, error: 'لا يمكن التراجع، هذا هو الإصدار التأسيسي الوحيد المتاح.' });
+  }
+});
+
+// AI ERP Assistant Endpoint
+app.post('/api/ai/:dbId', async (req, res) => {
+  const { dbId } = req.params;
+  const { message, history } = req.body;
+
+  if (!process.env.GEMINI_API_KEY) {
+    return res.status(400).json({
+      error: 'مفتاح API الخاص بـ Gemini غير متوفر في بيئة العمل. يرجى إضافته في الإعدادات.'
+    });
+  }
+
+  try {
+    const data = getDbData(dbId);
+    
+    // Create a compact and rich JSON context containing items, invoices, accounts, etc.
+    const compactData = {
+      settings: data.settings || {},
+      branchesCount: data.branches?.length || 0,
+      warehouses: data.warehouses?.map((w: any) => ({ id: w.id, name: w.name, branchId: w.branchId })) || [],
+      costCenters: data.costCenters?.map((c: any) => ({ id: c.id, name: c.name, code: c.code })) || [],
+      currencies: data.currencies?.map((c: any) => ({ id: c.id, name: c.name, symbol: c.symbol, rate: c.rate })) || [],
+      accounts: data.accounts?.map((a: any) => ({ id: a.id, code: a.code, name: a.name, type: a.type, balance: a.balance })) || [],
+      customers: data.customers?.map((c: any) => ({ id: c.id, name: c.name, type: c.type, balance: c.balance })) || [],
+      items: data.items?.map((i: any) => ({ id: i.id, code: i.code, name: i.name, currentStock: i.currentStock, averageCost: i.averageCost, salePrice: i.salePrice, minStock: i.minStock })) || [],
+      invoices: data.invoices?.slice(0, 30).map((inv: any) => ({
+        id: inv.id,
+        invoiceNo: inv.invoiceNo,
+        date: inv.date,
+        type: inv.type,
+        customerId: inv.customerId,
+        totalAmount: inv.totalAmount,
+        discount: inv.discount,
+        taxAmount: inv.taxAmount,
+        netAmount: inv.netAmount,
+        paidAmount: inv.paidAmount,
+        posted: inv.posted,
+        items: inv.items?.map((itm: any) => ({ itemId: itm.itemId, quantity: itm.quantity, unitPrice: itm.unitPrice, total: itm.total })) || []
+      })) || [],
+      journalEntries: data.journalEntries?.slice(0, 20).map((je: any) => ({
+        id: je.id,
+        entryNo: je.entryNo,
+        date: je.date,
+        description: je.description,
+        posted: je.posted,
+        rows: je.rows?.map((r: any) => ({ accountId: r.accountId, debit: r.debit, credit: r.credit, notes: r.notes })) || []
+      })) || [],
+      manufacturing: data.manufacturing?.map((m: any) => ({ id: m.id, orderNo: m.orderNo, status: m.status, productItemId: m.productItemId, quantity: m.quantity })) || [],
+    };
+
+    const ai = new GoogleGenAI({
+      apiKey: process.env.GEMINI_API_KEY,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        }
+      }
+    });
+
+    const systemInstruction = `
+أنت المساعد الذكي الاحترافي المدمج في نظام "الميزان دوت نت" السحابي لتخطيط موارد المؤسسات (ERP).
+مهمتك هي مساعدة المستخدم في إدارة النظام، قراءة وتحليل البيانات المالية، تنفيذ العمليات، البحث الذكي، وإعداد التقارير والرسوم البيانية.
+
+تاريخ اليوم الحالي هو: 2026-07-04.
+
+يجب أن ترجع إجابتك دائماً كصيغة JSON صالحة ومطابقة للتركيب التالي حصراً وبدون أي نصوص إضافية خارج الـ JSON:
+{
+  "responseText": "إجابتك النصية التفصيلية والمهنية باللغة العربية (أو الإنجليزية إذا طلب المستخدم). يمكنك استخدام التنسيق الغني للماركداون (نقاط، خط عريض، جداول مبسطة) لشرح تحليلك بوضوح وصياغتها بجمالية هندسية راقية.",
+  "action": {
+    "type": "open_window",
+    "windowId": "customers" | "suppliers" | "invoice" | "reports" | "journal_entry" | "item_card" | "item_tree" | "definitions" | "hr_employees" | "chart_of_accounts" | "cost_centers" | "currencies",
+    "params": {
+      "invoiceType": "sale" | "purchase" | "sale_return" | "purchase_return",
+      "reportType": "general_ledger" | "trial_balance" | "inventory_list" | "customer_balances" | "item_profit"
+    }
+  },
+  "chart": {
+    "type": "bar" | "line" | "pie",
+    "title": "عنوان الرسم البياني التوضيحي",
+    "data": [
+      { "name": "اسم المؤشر أو المادة أو الحساب", "value": 120 }
+    ]
+  },
+  "report": {
+    "title": "عنوان التقرير التفصيلي المتولد",
+    "headers": ["العمود 1", "العمود 2"],
+    "rows": [
+      ["قيمة 1", "قيمة 2"]
+    ]
+  }
+}
+
+ملاحظات هيكلية:
+- الحقل "action" اختياري ومخصص للأوامر التنفيذية. حدده فقط إذا تطلب طلب المستخدم فتح شاشة، أو إنشاء فاتورة، أو عرض تقرير، أو إدخال قيد.
+  - إذا قال "افتح شاشة العملاء" أو "أنشئ عميل جديد"، حدد windowId: "customers".
+  - إذا قال "افتح فاتورة مبيعات جديدة"، حدد windowId: "invoice" مع invoiceType: "sale".
+  - إذا قال "افتح فاتورة مشتريات جديدة"، حدد windowId: "invoice" مع invoiceType: "purchase".
+  - إذا قال "افتح شجرة الحسابات" أو "المحاسبة"، حدد windowId: "chart_of_accounts".
+  - إذا قال "افتح شاشة الموظفين" أو "إدارة الموارد البشرية"، حدد windowId: "hr_employees".
+  - إذا قال "افتح شاشة سندات القيد"، حدد windowId: "journal_entry".
+  - إذا قال "اعرض كشف حساب عميل" أو "تقرير أرصدة العملاء"، حدد windowId: "reports" مع reportType: "customer_balances".
+  - إذا قال "عرض حركة صنف" أو "جرد المخزون"، حدد windowId: "reports" مع reportType: "inventory_list".
+  - إذا قال "أرباح المواد"، حدد windowId: "reports" مع reportType: "item_profit".
+- الحقل "chart" اختياري ومخصص للرسوم البيانية. أرفقه عندما يطلب المستخدم رسماً بيانياً أو يطلب تحليلاً يتطلب مقارنة إحصائية أو عرضاً مرئياً لبيانات المخازن أو المبيعات.
+- الحقل "report" اختياري لجدولة البيانات كتقارير تفاعلية منظمة ونظيفة.
+
+إرشادات التحليل المالي والكمي:
+1. مبيعات اليوم: ابحث في الفواتير (invoices) عن الفواتير ذات النوع 'sale' والمنشأة بتاريخ اليوم (2026-07-04)، وقم بجمع صافي قيمتها (netAmount).
+2. أرباح هذا الشهر: هامش الربح من مبيعات المواد (salePrice - averageCost) لكل مادة مضروباً في كمية المبيعات من الفواتير، أو من خلال حساب الفرق بين إيرادات المبيعات وتكلفة البضاعة المباعة والمصاريف.
+3. أكثر عميل شراءً: قم بفرز العملاء من واقع الفواتير لتجد من لديه أعلى مجموع مبيعات أو أعلى رصيد مدين.
+4. الأصناف التي قاربت على النفاد: ابحث في قائمة المواد (items) عن المواد التي يكون فيها المخزون الحالي (currentStock) مساوياً أو أقل من الحد الأدنى للمخزون (minStock).
+5. الفواتير غير المسددة: ابحث في الفواتير عن الفواتير حيث paidAmount < netAmount.
+6. تحليل البيانات والاقتراحات:
+   - اقتراح طلب شراء: حدد الأصناف التي قاربت على النفاد، واقترح كمية شرائية مناسبة لرفع المخزون إلى حد الأمان.
+   - اقتراح تحويل بين المخازن: إذا كان الصنف متوفراً بكثرة في مستودع وغير متوفر في مستودع آخر، اقترح التحويل.
+   - الأصناف الراكدة: هي الأصناف التي مخزونها الحالي مرتفع ولم تظهر في أي من الفواتير البيعية الأخيرة.
+   - الأصناف الأكثر ربحية: قارن بين (salePrice - averageCost) لكل مادة لمعرفة المادة ذات الهامش الأعلى.
+   - الأخطاء المحاسبية المحتملة: ابحث عن قيد غير متزن (debit != credit)، أو أرصدة سالبة في حسابات الأصول أو أرصدة مدينة في الخصوم بدون تفسير.
+   - تنبيه هبوط المبيعات: إذا كان حجم المبيعات لهذا الأسبوع منخفضاً مقارنة بالمتوسط، نبه المستخدم.
+
+بيانات النظام الحالية المتاحة لك للتحليل والبحث والعمليات:
+${JSON.stringify(compactData, null, 2)}
+    `;
+
+    // Process chat history to match Gemini's format if provided
+    const contents: any[] = [];
+    if (history && Array.isArray(history)) {
+      history.forEach((h: any) => {
+        contents.push({
+          role: h.sender === 'user' ? 'user' : 'model',
+          parts: [{ text: h.text }]
+        });
+      });
+    }
+    
+    // Add current user query
+    contents.push({
+      role: 'user',
+      parts: [{ text: message }]
+    });
+
+    const response = await ai.models.generateContent({
+      model: "gemini-3.5-flash",
+      contents,
+      config: {
+        systemInstruction,
+        responseMimeType: "application/json"
+      }
+    });
+
+    const text = response.text || '{}';
+    try {
+      const parsed = JSON.parse(text);
+      res.json(parsed);
+    } catch (parseErr) {
+      console.error('Failed to parse Gemini response as JSON. Raw response:', text);
+      res.json({
+        responseText: text,
+        action: null,
+        chart: null,
+        report: null
+      });
+    }
+
+  } catch (err: any) {
+    console.error('AI assistant error:', err);
+    res.status(500).json({
+      error: `حدث خطأ أثناء معالجة طلب المساعد الذكي: ${err.message}`
+    });
   }
 });
 
